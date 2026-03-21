@@ -1,0 +1,77 @@
+"""ProdMCP Prompt example.
+
+Demonstrates how to define and use prompts with input schemas.
+"""
+
+from typing import List
+from pydantic import BaseModel, Field
+from prodmcp import ProdMCP
+
+# 1. Define input schemas for prompts
+class UserProfile(BaseModel):
+    name: str
+    age: int
+    interests: List[str]
+
+class ArticleSummaryInput(BaseModel):
+    title: str
+    content: str
+    max_length: int = Field(default=50, description="The maximum length of the summary.")
+
+# 2. Initialize ProdMCP app
+app = ProdMCP("PromptExample")
+
+# 3. Define a simple prompt
+@app.prompt(
+    name="greet_user",
+    description="Generate a personalized greeting for the user."
+)
+def greet_user(name: str) -> str:
+    """Generate a greeting."""
+    return f"Hello, {name}! How can I help you today?"
+
+# 4. Define a prompt with a more complex input schema
+@app.prompt(
+    name="explain_profile",
+    description="Explain a user's profile based on their name, age, and interests.",
+    input_schema=UserProfile
+)
+def explain_profile(name: str, age: int, interests: List[str]) -> str:
+    """Explain a person's interests."""
+    interest_str = ", ".join(interests)
+    return (
+        f"You should explain why {name}, who is {age} years old, "
+        f"might be interested in {interest_str}."
+    )
+
+# 5. Define a prompt with default values and validation
+@app.prompt(
+    name="summarize_article",
+    description="Summarize an article with a specified maximum length.",
+    input_schema=ArticleSummaryInput
+)
+def summarize_article(title: str, content: str, max_length: int = 50) -> str:
+    """Generate a summary prompt."""
+    return (
+        f"Summarize the following article titled '{title}' "
+        f"to a maximum of {max_length} words: {content}"
+    )
+
+# 6. Define a multi-step prompt (chaining logic)
+@app.prompt(
+    name="analyze_prompt",
+    description="Analyze a theme across multiple texts.",
+)
+def analyze_theme(theme: str, texts: List[str]) -> str:
+    """Analyze a common theme in multiple texts."""
+    text_listing = "\n".join([f"- {text}" for text in texts])
+    return (
+        f"Analyze the theme of '{theme}' across the following texts:\n"
+        f"{text_listing}"
+    )
+
+if __name__ == "__main__":
+    # Export the spec
+    print(app.export_openmcp_json())
+    # To run the server:
+    # app.run()
