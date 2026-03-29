@@ -153,3 +153,44 @@ class TestSecurityManager:
         )
         assert result == [{"bearerAuth": ["user"]}]
         assert "bearerAuth" in mgr._schemes
+
+class TestNewSecuritySchemes:
+    def test_http_basic_auth(self):
+        from prodmcp.security import HTTPBasicAuth
+        scheme = HTTPBasicAuth()
+        
+        ctx = scheme.extract({"headers": {"authorization": "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=="}})
+        assert ctx.token == "open sesame"
+        assert ctx.metadata["username"] == "Aladdin"
+        assert scheme.to_spec() == {"type": "http", "scheme": "basic"}
+
+    def test_api_key_cookie(self):
+        from prodmcp.security import APIKeyCookie
+        scheme = APIKeyCookie(name="session_id")
+        
+        ctx = scheme.extract({"cookies": {"session_id": "foobar123"}})
+        assert ctx.token == "foobar123"
+        assert scheme.to_spec() == {"type": "apiKey", "name": "session_id", "in": "cookie"}
+
+    def test_oauth2_password_bearer(self):
+        from prodmcp.security import OAuth2PasswordBearer
+        scheme = OAuth2PasswordBearer(tokenUrl="https://example.com/token", scopes={"read": "Read access"})
+        
+        ctx = scheme.extract({"headers": {"authorization": "Bearer super_token"}})
+        assert ctx.token == "super_token"
+        assert ctx.scopes == ["read"]
+        assert scheme.to_spec() == {
+            "type": "oauth2",
+            "flows": {"password": {"tokenUrl": "https://example.com/token", "scopes": {"read": "Read access"}}}
+        }
+
+    def test_open_id_connect(self):
+        from prodmcp.security import OpenIdConnect
+        scheme = OpenIdConnect(openIdConnectUrl="https://example.com/.well-known/openid-configuration")
+        
+        ctx = scheme.extract({"headers": {"authorization": "Bearer oidc_token"}})
+        assert ctx.token == "oidc_token"
+        assert scheme.to_spec() == {
+            "type": "openIdConnect",
+            "openIdConnectUrl": "https://example.com/.well-known/openid-configuration"
+        }

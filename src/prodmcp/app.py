@@ -133,19 +133,6 @@ class ProdMCP:
             tool_desc = description or fn.__doc__ or ""
             is_strict = strict if strict is not None else self.strict_output
 
-            # Store metadata
-            self._registry["tools"][tool_name] = {
-                "name": tool_name,
-                "description": tool_desc.strip(),
-                "input_schema": input_schema,
-                "output_schema": output_schema,
-                "security": security or [],
-                "middleware": middleware or [],
-                "tags": tags,
-                "handler": fn,
-                "strict": is_strict,
-            }
-
             # Build the wrapped handler
             wrapped = self._build_handler(
                 fn,
@@ -157,6 +144,19 @@ class ProdMCP:
                 entity_middleware=middleware,
                 strict=is_strict,
             )
+
+            # Store metadata
+            self._registry["tools"][tool_name] = {
+                "name": tool_name,
+                "description": tool_desc.strip(),
+                "input_schema": input_schema,
+                "output_schema": output_schema,
+                "security": getattr(wrapped, "__security_config__", security or []),
+                "middleware": middleware or [],
+                "tags": tags,
+                "handler": fn,
+                "strict": is_strict,
+            }
 
             # Register with FastMCP
             self.mcp.tool(
@@ -284,13 +284,58 @@ class ProdMCP:
         strict: bool = True,
     ) -> Callable[..., Any]:
         """Build a fully wrapped handler with validation, security, and middleware."""
+        import functools
+        from .security import SecurityScheme
+
+        security_config = list(security_config) if security_config else []
+        sig = inspect.signature(fn)
+        new_params = []
+        has_dependencies = False
+
+        for name, param in sig.parameters.items():
+            if isinstance(param.default, Depends):
+                has_dependencies = True
+                dep = param.default.dependency
+                if isinstance(dep, SecurityScheme):
+                    scheme_name = f"auto_{dep.scheme_type}_{id(dep)}"
+                    self.add_security_scheme(scheme_name, dep)
+                    scopes = getattr(dep, "scopes", []) 
+                    if hasattr(dep, "scopes_description"):
+                        scopes = list(dep.scopes_description.keys())
+                    security_config.append({scheme_name: scopes})
+            else:
+                new_params.append(param)
+
+        stripped_sig = sig.replace(parameters=new_params)
+
+        if has_dependencies:
+            @functools.wraps(fn)
+            async def dep_wrapper(*args: Any, **kwargs: Any) -> Any:
+                context = kwargs.pop("__request_context__", {})
+                kwargs.pop("__security_context__", None)
+                
+                # Resolve dependencies
+                resolved = await resolve_dependencies(fn, context, overrides=kwargs)
+                kwargs.update(resolved)
+                
+                if asyncio.iscoroutinefunction(fn):
+                    return await fn(*args, **kwargs)
+                return fn(*args, **kwargs)
+            
+            dep_wrapper.__signature__ = stripped_sig
+            handler = dep_wrapper
+        else:
+            handler = fn
+            handler.__signature__ = stripped_sig
+
         # 1. Validation wrapping
         handler = create_validated_handler(
-            fn,
+            handler,
             input_schema=input_schema,
             output_schema=output_schema,
             strict=strict,
         )
+        setattr(handler, "__has_dependencies__", has_dependencies)
 
         # 2. Security wrapping
         if security_config:
@@ -304,6 +349,9 @@ class ProdMCP:
             entity_type,
             entity_name,
         )
+
+        # Stash to expose modified security config
+        setattr(handler, "__security_config__", security_config)
 
         return handler
 
@@ -319,9 +367,18 @@ class ProdMCP:
 
         @functools.wraps(handler)
         async def secured(**kwargs: Any) -> Any:
-            # Extract context from kwargs if available
+            # Pop security context if it exists, or provide empty dict for scheme extraction
             context = kwargs.pop("__security_context__", {})
             security_mgr.check(context, security_config)
+            
+            # Forward raw context to inner layers so Depends can access it
+            if getattr(handler, "__has_dependencies__", False):
+                kwargs["__request_context__"] = context
+                
+            # If the user explicitly requested __security_context__, pass it through
+            if "__security_context__" in inspect.signature(handler).parameters:
+                kwargs["__security_context__"] = context
+            
             if asyncio.iscoroutinefunction(handler):
                 return await handler(**kwargs)
             return handler(**kwargs)
@@ -338,6 +395,13 @@ class ProdMCP:
     def export_openmcp_json(self, indent: int = 2) -> str:
         """Generate and return the OpenMCP specification as a JSON string."""
         return spec_to_json(generate_spec(self), indent=indent)
+
+    # ── FastAPI Bridge ─────────────────────────────────────────────────
+
+    def as_fastapi(self) -> Any:
+        """Return a FastAPI application object representing this MCP Server."""
+        from .fastapi import create_fastapi_app
+        return create_fastapi_app(self)
 
     # ── Run ────────────────────────────────────────────────────────────
 

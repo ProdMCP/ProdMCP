@@ -1,7 +1,4 @@
-"""Security layer for ProdMCP.
-
-Provides security scheme definitions, token extraction, and validation.
-"""
+"""Base security definitions for ProdMCP."""
 
 from __future__ import annotations
 
@@ -10,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from .exceptions import ProdMCPSecurityError
+from ..exceptions import ProdMCPSecurityError
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +32,7 @@ class SecurityScheme(ABC):
         """Extract security information from the request context.
 
         Args:
-            context: A dict containing request metadata (headers, params, etc.)
+            context: A dict containing request metadata (headers, query_params, cookies, etc.)
 
         Returns:
             A SecurityContext with extracted credentials.
@@ -48,67 +45,13 @@ class SecurityScheme(ABC):
     def to_spec(self) -> dict[str, Any]:
         """Return the OpenMCP/OpenAPI-style security scheme definition."""
 
-
-class BearerAuth(SecurityScheme):
-    """Bearer token authentication."""
-
-    scheme_type = "http"
-
-    def __init__(self, scopes: list[str] | None = None) -> None:
-        self.scopes = scopes or []
-
-    def extract(self, context: dict[str, Any]) -> SecurityContext:
-        headers: dict[str, str] = context.get("headers", {})
-        auth_header = headers.get("authorization", headers.get("Authorization", ""))
-        if not auth_header.startswith("Bearer "):
-            raise ProdMCPSecurityError(
-                "Missing or invalid Bearer token", scheme="bearerAuth"
-            )
-        token = auth_header[7:]
-        return SecurityContext(token=token, scopes=self.scopes)
-
-    def to_spec(self) -> dict[str, Any]:
-        return {
-            "type": "http",
-            "scheme": "bearer",
-            "bearerFormat": "JWT",
-        }
-
-
-class ApiKeyAuth(SecurityScheme):
-    """API key authentication via header or query parameter."""
-
-    scheme_type = "apiKey"
-
-    def __init__(
-        self,
-        key_name: str = "X-API-Key",
-        location: str = "header",
-    ) -> None:
-        self.key_name = key_name
-        self.location = location  # "header" or "query"
-
-    def extract(self, context: dict[str, Any]) -> SecurityContext:
-        if self.location == "header":
-            headers: dict[str, str] = context.get("headers", {})
-            api_key = headers.get(self.key_name, headers.get(self.key_name.lower(), ""))
-        else:
-            params: dict[str, str] = context.get("query_params", {})
-            api_key = params.get(self.key_name, "")
-
-        if not api_key:
-            raise ProdMCPSecurityError(
-                f"Missing API key in {self.location}: {self.key_name}",
-                scheme="apiKey",
-            )
-        return SecurityContext(token=api_key, metadata={"key_name": self.key_name})
-
-    def to_spec(self) -> dict[str, Any]:
-        return {
-            "type": "apiKey",
-            "name": self.key_name,
-            "in": self.location,
-        }
+    def __call__(self, context: dict[str, Any]) -> str | None:
+        """Allow the scheme to be used directly as a dependency.
+        
+        Returns the extracted token.
+        """
+        sec_ctx = self.extract(context)
+        return sec_ctx.token
 
 
 class CustomAuth(SecurityScheme):
@@ -224,12 +167,21 @@ class SecurityManager:
         scopes = requirement.get("scopes", [])
 
         if auth_type == "bearer":
-            scheme = BearerAuth(scopes=scopes)
+            from .http import HTTPBearer
+            scheme = HTTPBearer(scopes=scopes)
             return scheme.extract(context)
         elif auth_type == "apikey":
+            from .api_key import APIKeyHeader, APIKeyQuery, APIKeyCookie
             key_name = requirement.get("key_name", "X-API-Key")
             location = requirement.get("in", "header")
-            scheme = ApiKeyAuth(key_name=key_name, location=location)
+            if location == "header":
+                scheme = APIKeyHeader(name=key_name)
+            elif location == "query":
+                scheme = APIKeyQuery(name=key_name)
+            elif location == "cookie":
+                scheme = APIKeyCookie(name=key_name)
+            else:
+                raise ProdMCPSecurityError(f"Invalid api key location {location}", scheme="apikey")
             return scheme.extract(context)
         else:
             raise ProdMCPSecurityError(
@@ -255,16 +207,21 @@ class SecurityManager:
                 if auth_type == "bearer":
                     scheme_name = "bearerAuth"
                     if scheme_name not in self._schemes:
-                        self.register_scheme(scheme_name, BearerAuth(scopes=scopes))
+                        from .http import HTTPBearer
+                        self.register_scheme(scheme_name, HTTPBearer(scopes=scopes))
                     result.append({scheme_name: scopes})
                 elif auth_type == "apikey":
-                    scheme_name = "apiKeyAuth"
+                    key_name = requirement.get("key_name", "X-API-Key")
+                    location = requirement.get("in", "header")
+                    scheme_name = f"apiKeyAuth_{location}_{key_name}"
                     if scheme_name not in self._schemes:
-                        key_name = requirement.get("key_name", "X-API-Key")
-                        location = requirement.get("in", "header")
-                        self.register_scheme(
-                            scheme_name, ApiKeyAuth(key_name=key_name, location=location)
-                        )
+                        from .api_key import APIKeyHeader, APIKeyQuery, APIKeyCookie
+                        if location == "header":
+                            self.register_scheme(scheme_name, APIKeyHeader(name=key_name))
+                        elif location == "query":
+                            self.register_scheme(scheme_name, APIKeyQuery(name=key_name))
+                        elif location == "cookie":
+                            self.register_scheme(scheme_name, APIKeyCookie(name=key_name))
                     result.append({scheme_name: scopes})
                 else:
                     result.append(requirement)
