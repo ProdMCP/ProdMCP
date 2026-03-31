@@ -4,23 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prodmcp"
-version = "0.2.0"
-description = "FastAPI-like production layer on top of FastMCP with schema-driven development, validation, security, middleware, and OpenMCP spec generation."
+version = "0.3.0"
+description = "Unified production framework for both REST APIs and MCP servers. Drop-in replacement for FastAPI and FastMCP with schema validation, security, middleware, and OpenMCP spec generation."
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "Anish Chelliah CR", email = "anishchelliah.cr@gmail.com"},
 ]
-keywords = ["mcp", "fastmcp", "schema", "validation", "openmcp"]
+keywords = ["mcp", "fastmcp", "fastapi", "schema", "validation", "openmcp", "unified", "rest", "api", "pydantic", "middleware", "security"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]

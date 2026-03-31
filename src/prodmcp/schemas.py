@@ -157,6 +157,24 @@ def _check_json_type(value: Any, expected: str) -> bool:
     return isinstance(value, allowed)
 
 
+def _rewrite_refs(obj: Any) -> None:
+    """Recursively rewrite ``#/$defs/X`` refs to ``#/components/schemas/X``.
+
+    Pydantic v2 ``model_json_schema()`` places nested model definitions
+    under ``$defs`` and references them via ``#/$defs/ModelName``.  When
+    we hoist those definitions into ``components.schemas``, the ``$ref``
+    pointers must be rewritten to match.
+    """
+    if isinstance(obj, dict):
+        if "$ref" in obj and isinstance(obj["$ref"], str):
+            obj["$ref"] = obj["$ref"].replace("#/$defs/", "#/components/schemas/")
+        for value in obj.values():
+            _rewrite_refs(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            _rewrite_refs(item)
+
+
 def extract_schema_ref(
     schema: Type[BaseModel] | dict[str, Any] | None,
     components: dict[str, Any],
@@ -181,9 +199,12 @@ def extract_schema_ref(
         json_schema = schema.model_json_schema()
         # Extract $defs if present (Pydantic v2 nests referenced models)
         defs = json_schema.pop("$defs", {})
-        components.setdefault("schemas", {})[name] = json_schema
+        # Rewrite $ref paths from #/$defs/X to #/components/schemas/X
+        _rewrite_refs(json_schema)
         for def_name, def_schema in defs.items():
-            components["schemas"][def_name] = def_schema
+            _rewrite_refs(def_schema)
+            components.setdefault("schemas", {})[def_name] = def_schema
+        components.setdefault("schemas", {})[name] = json_schema
         return {"$ref": f"#/components/schemas/{name}"}
 
     if isinstance(schema, dict):

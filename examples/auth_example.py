@@ -1,25 +1,34 @@
 """ProdMCP Authentication example.
 
-Demonstrates API Key and Bearer Token authentication using shorthand 
+Demonstrates API Key and Bearer Token authentication using shorthand
 and registered security schemes.
+
+Also shows how @app.common() can centralise security config when the same
+handler is exposed as both an MCP tool and a REST endpoint (v0.3.0).
 """
 
 from pydantic import BaseModel
 from prodmcp import ProdMCP, BearerAuth, ApiKeyAuth
 
-# 1. Define schemas
+
+# ── Schemas ────────────────────────────────────────────────────────────
+
 class SecureData(BaseModel):
     id: str
     secret_value: str
 
-# 2. Initialize ProdMCP app
+
+# ── App Setup ──────────────────────────────────────────────────────────
+
 app = ProdMCP("AuthExample")
 
-# 3. Register a named security scheme (OpenAPI style)
+# Register named security schemes (OpenAPI style)
 app.add_security_scheme("bearerAuth", BearerAuth(scopes=["admin", "user"]))
 app.add_security_scheme("apiKeyAuth", ApiKeyAuth(key_name="X-API-Key", location="header"))
 
-# 4. Tool using shorthand bearer authentication
+
+# ── Shorthand bearer security ─────────────────────────────────────────
+
 @app.tool(
     name="get_secure_data_shorthand",
     description="Fetch secure data using shorthand bearer config.",
@@ -29,7 +38,9 @@ def get_secure_data_shorthand() -> dict:
     """Fetch data with shorthand bearer auth."""
     return {"id": "123", "secret_value": "shorthand-secret"}
 
-# 5. Tool using registered security schemes
+
+# ── Named scheme: bearer ───────────────────────────────────────────────
+
 @app.tool(
     name="get_admin_data",
     description="Fetch admin-only data using registered bearerAuth.",
@@ -39,7 +50,9 @@ def get_admin_data() -> dict:
     """Fetch admin data."""
     return {"id": "admin-1", "secret_value": "admin-secret"}
 
-# 6. Tool using API Key authentication
+
+# ── Named scheme: API Key ──────────────────────────────────────────────
+
 @app.tool(
     name="get_api_data",
     description="Fetch data using API key authentication.",
@@ -49,10 +62,12 @@ def get_api_data() -> dict:
     """Fetch data with API key."""
     return {"id": "api-1", "secret_value": "api-key-protected"}
 
-# 7. Tool with multiple authentication options (logical OR)
+
+# ── OR semantics: bearer OR API Key ──────────────────────────────────
+
 @app.tool(
     name="get_public_secure_data",
-    description="Fetch data that can be accessed via either Bearer or API Key.",
+    description="Accessible via either Bearer or API Key.",
     security=[
         {"bearerAuth": ["user"]},
         {"apiKeyAuth": []}
@@ -62,8 +77,26 @@ def get_public_secure_data() -> dict:
     """Fetch data with either auth method."""
     return {"id": "public-1", "secret_value": "flexible-secret"}
 
+
+# ── v0.3.0: @app.common() shares security across MCP + REST ──────────
+# The same handler exposed as both an MCP tool AND a REST API endpoint,
+# with the security config declared only once in @app.common().
+
+@app.common(
+    output_schema=SecureData,
+    security=[{"bearerAuth": ["user"]}],
+)
+@app.tool(name="get_profile", description="Get the current user's profile.")
+@app.get("/profile", tags=["auth"])
+def get_profile() -> dict:
+    """Fetch the authenticated user's profile."""
+    return {"id": "me", "secret_value": "my-profile-data"}
+
+
 if __name__ == "__main__":
     # Export the spec to see security definitions
     print(app.export_openmcp_json())
-    # To run the server:
-    # app.run()
+
+    # Run options (v0.3.0):
+    # app.run()                    # Unified: REST + MCP at /mcp (default)
+    # app.run(transport="stdio")   # Pure MCP over stdin/stdout

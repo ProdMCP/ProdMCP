@@ -1,27 +1,37 @@
 """ProdMCP Prompt example.
 
 Demonstrates how to define and use prompts with input schemas.
+
+Prompts are MCP-specific (no REST equivalent). They work the same
+in both pure MCP and unified (REST + MCP) mode.
 """
 
 from typing import List
 from pydantic import BaseModel, Field
 from prodmcp import ProdMCP
 
-# 1. Define input schemas for prompts
+
+# ── Schemas ────────────────────────────────────────────────────────────
+
 class UserProfile(BaseModel):
     name: str
     age: int
     interests: List[str]
 
+
 class ArticleSummaryInput(BaseModel):
     title: str
     content: str
-    max_length: int = Field(default=50, description="The maximum length of the summary.")
+    max_length: int = Field(default=50, description="Maximum length of the summary.")
 
-# 2. Initialize ProdMCP app
+
+# ── App Setup ──────────────────────────────────────────────────────────
+
 app = ProdMCP("PromptExample")
 
-# 3. Define a simple prompt
+
+# ── Simple prompt ─────────────────────────────────────────────────────
+
 @app.prompt(
     name="greet_user",
     description="Generate a personalized greeting for the user."
@@ -30,7 +40,9 @@ def greet_user(name: str) -> str:
     """Generate a greeting."""
     return f"Hello, {name}! How can I help you today?"
 
-# 4. Define a prompt with a more complex input schema
+
+# ── Prompt with structured input schema ───────────────────────────────
+
 @app.prompt(
     name="explain_profile",
     description="Explain a user's profile based on their name, age, and interests.",
@@ -44,7 +56,9 @@ def explain_profile(name: str, age: int, interests: List[str]) -> str:
         f"might be interested in {interest_str}."
     )
 
-# 5. Define a prompt with default values and validation
+
+# ── Prompt with defaults ───────────────────────────────────────────────
+
 @app.prompt(
     name="summarize_article",
     description="Summarize an article with a specified maximum length.",
@@ -57,9 +71,11 @@ def summarize_article(title: str, content: str, max_length: int = 50) -> str:
         f"to a maximum of {max_length} words: {content}"
     )
 
-# 6. Define a multi-step prompt (chaining logic)
+
+# ── Multi-step prompt ──────────────────────────────────────────────────
+
 @app.prompt(
-    name="analyze_prompt",
+    name="analyze_theme",
     description="Analyze a theme across multiple texts.",
 )
 def analyze_theme(theme: str, texts: List[str]) -> str:
@@ -70,8 +86,11 @@ def analyze_theme(theme: str, texts: List[str]) -> str:
         f"{text_listing}"
     )
 
+
 if __name__ == "__main__":
     # Export the spec
     print(app.export_openmcp_json())
-    # To run the server:
-    # app.run()
+
+    # Run options (v0.3.0):
+    # app.run()                   # Unified: REST at / and MCP at /mcp (default)
+    # app.run(transport="stdio")  # Pure MCP over stdin/stdout (Claude Desktop etc.)

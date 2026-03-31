@@ -1,7 +1,13 @@
 """ProdMCP basic example server.
 
-Demonstrates tools, prompts, resources with schemas, security, middleware,
-and OpenMCP spec export.
+Demonstrates tools, prompts, resources with schemas, security, and middleware.
+Also shows how to expose MCP tools as REST API endpoints (unified mode).
+
+Run modes:
+    python basic_server.py               # Prints the OpenMCP spec
+    app.run()                            # Unified: REST + MCP at /mcp/sse (default)
+    app.run(transport="stdio")           # MCP over stdin/stdout (Claude Desktop etc.)
+    app.run(transport="sse")             # Pure MCP SSE only
 """
 
 import json
@@ -39,20 +45,7 @@ app = ProdMCP("MyServer", version="1.0.0")
 app.add_middleware(LoggingMiddleware, name="logging")
 
 
-# ── Tools ──────────────────────────────────────────────────────────────
-
-
-@app.tool(
-    name="get_user_data",
-    description="Fetch user profile data by user ID.",
-    input_schema=UserInput,
-    output_schema=UserOutput,
-    security=[{"type": "bearer", "scopes": ["user"]}],
-    middleware=["logging"],
-)
-def get_user_data(user_id: str) -> dict:
-    """Retrieve user data from the database."""
-    return {"name": "Alice", "email": "alice@example.com"}
+# ── Tools (MCP only) ───────────────────────────────────────────────────
 
 
 @app.tool(
@@ -66,6 +59,26 @@ def summarize_text(text: str, max_length: int = 500) -> dict:
     words = text.split()
     summary = " ".join(words[:max_length])
     return {"summary": summary, "word_count": len(words)}
+
+
+# ── Stacked: tool + REST API route ────────────────────────────────────
+# The same handler is exposed via both:
+#   MCP:  tool name "get_user_data"
+#   REST: GET /users/{user_id}  ← new in v0.3.0
+
+
+@app.tool(
+    name="get_user_data",
+    description="Fetch user profile data by user ID.",
+    input_schema=UserInput,
+    output_schema=UserOutput,
+    security=[{"type": "bearer", "scopes": ["user"]}],
+    middleware=["logging"],
+)
+@app.get("/users/{user_id}", response_model=UserOutput, tags=["users"])
+def get_user_data(user_id: str) -> dict:
+    """Retrieve user data from the database."""
+    return {"name": "Alice", "email": "alice@example.com"}
 
 
 # ── Prompts ────────────────────────────────────────────────────────────
@@ -98,10 +111,23 @@ def user_database() -> list:
     ]
 
 
-# ── Export Spec ────────────────────────────────────────────────────────
+# ── Health endpoint (REST only, v0.3.0) ───────────────────────────────
+
+
+@app.get("/health", tags=["system"])
+def health() -> dict:
+    """Health check."""
+    return {"status": "ok", "version": "1.0.0"}
+
+
+# ── Main ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     spec = app.export_openmcp()
     print(json.dumps(spec, indent=2))
-    # Uncomment to run the MCP server:
-    # app.run()
+
+    # Run options:
+    # app.run()                         # Unified: REST + MCP (default)
+    # app.run(transport="stdio")        # Pure MCP over stdin/stdout
+    # app.run(transport="sse")          # Pure MCP SSE only
+    # app.run(host="0.0.0.0", port=9000)  # Custom host/port

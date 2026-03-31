@@ -1,4 +1,6 @@
-"""ProdMCP — FastAPI-like production layer for MCP.
+"""ProdMCP — Unified production layer for API and MCP.
+
+Drop-in replacement for both FastAPI and FastMCP.
 
 Public API exports.
 """
@@ -23,7 +25,20 @@ from .security import (
     SecurityScheme,
 )
 
-__version__ = "0.1.0"
+# Re-export HTTPException for FastAPI migration compatibility
+try:
+    from fastapi import HTTPException
+except ImportError:
+    # If FastAPI is not installed, provide a basic fallback
+    class HTTPException(Exception):  # type: ignore[no-redef]
+        """Fallback HTTPException when FastAPI is not installed."""
+        def __init__(self, status_code: int = 500, detail: str = "") -> None:
+            self.status_code = status_code
+            self.detail = detail
+            super().__init__(detail)
+
+
+__version__ = "0.3.0"
 
 __all__ = [
     # Core
@@ -41,6 +56,8 @@ __all__ = [
     "LoggingMiddleware",
     # Dependencies
     "Depends",
+    # HTTP Compat
+    "HTTPException",
     # Schemas
     "resolve_schema",
     "validate_data",

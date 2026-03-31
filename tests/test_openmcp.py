@@ -63,7 +63,7 @@ def _create_app_with_entities() -> ProdMCP:
 class TestGenerateSpec:
     def test_basic_structure(self):
         app = _create_app_with_entities()
-        spec = generate_spec(app)
+        spec = app.export_openmcp()  # Use export_openmcp to trigger finalization
 
         assert spec["openmcp"] == "1.0.0"
         assert spec["info"]["title"] == "TestServer"
@@ -71,7 +71,7 @@ class TestGenerateSpec:
 
     def test_tools_section(self):
         app = _create_app_with_entities()
-        spec = generate_spec(app)
+        spec = app.export_openmcp()
 
         assert "get_user" in spec["tools"]
         tool = spec["tools"]["get_user"]
@@ -81,7 +81,7 @@ class TestGenerateSpec:
 
     def test_prompts_section(self):
         app = _create_app_with_entities()
-        spec = generate_spec(app)
+        spec = app.export_openmcp()
 
         assert "explain" in spec["prompts"]
         prompt = spec["prompts"]["explain"]
@@ -90,7 +90,7 @@ class TestGenerateSpec:
 
     def test_resources_section(self):
         app = _create_app_with_entities()
-        spec = generate_spec(app)
+        spec = app.export_openmcp()
 
         assert "user_db" in spec["resources"]
         resource = spec["resources"]["user_db"]
@@ -99,7 +99,7 @@ class TestGenerateSpec:
 
     def test_components_schemas(self):
         app = _create_app_with_entities()
-        spec = generate_spec(app)
+        spec = app.export_openmcp()
 
         schemas = spec["components"]["schemas"]
         assert "UserInput" in schemas
@@ -108,14 +108,14 @@ class TestGenerateSpec:
 
     def test_security_schemes(self):
         app = _create_app_with_entities()
-        spec = generate_spec(app)
+        spec = app.export_openmcp()
 
         assert "securitySchemes" in spec["components"]
         assert "bearerAuth" in spec["components"]["securitySchemes"]
 
     def test_security_on_tool(self):
         app = _create_app_with_entities()
-        spec = generate_spec(app)
+        spec = app.export_openmcp()
 
         tool = spec["tools"]["get_user"]
         assert "security" in tool
@@ -125,8 +125,8 @@ class TestGenerateSpec:
 class TestSpecToJson:
     def test_serialization(self):
         app = _create_app_with_entities()
-        spec = generate_spec(app)
-        json_str = spec_to_json(spec)
+        spec = app.export_openmcp()
+        json_str = app.export_openmcp_json()
         assert '"openmcp": "1.0.0"' in json_str
         assert '"TestServer"' in json_str
 
@@ -134,7 +134,7 @@ class TestSpecToJson:
 class TestEmptyApp:
     def test_empty_spec(self):
         app = ProdMCP("EmptyServer")
-        spec = generate_spec(app)
+        spec = app.export_openmcp()
         assert spec["openmcp"] == "1.0.0"
         assert spec["info"]["title"] == "EmptyServer"
         # No tools/prompts/resources/components if nothing registered

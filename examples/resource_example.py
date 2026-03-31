@@ -1,27 +1,37 @@
 """ProdMCP Resource example.
 
 Demonstrates how to define and use resources with schemas and custom URIs.
+
+Resources are MCP-specific. In v0.3.0 you can stack a @app.resource with
+a @app.get to also expose the same data via a REST endpoint.
 """
 
 from typing import List
 from pydantic import BaseModel
 from prodmcp import ProdMCP
 
-# 1. Define schemas for resource data
+
+# ── Schemas ────────────────────────────────────────────────────────────
+
 class User(BaseModel):
     id: int
     name: str
     avatar_url: str
+
 
 class Article(BaseModel):
     id: int
     title: str
     content: str
 
-# 2. Initialize ProdMCP app
+
+# ── App Setup ──────────────────────────────────────────────────────────
+
 app = ProdMCP("ResourceExample")
 
-# 3. Define a static resource
+
+# ── Static resource (MCP only) ─────────────────────────────────────────
+
 @app.resource(
     uri="data://static/users",
     name="static_users",
@@ -32,10 +42,12 @@ def get_static_users() -> List[dict]:
     """Fetch a static list of users."""
     return [
         {"id": 1, "name": "Alice", "avatar_url": "https://example.com/alice.png"},
-        {"id": 2, "name": "Bob", "avatar_url": "https://example.com/bob.png"},
+        {"id": 2, "name": "Bob",   "avatar_url": "https://example.com/bob.png"},
     ]
 
-# 4. Define a resource with a dynamic URI (FastMCP supports templates)
+
+# ── Dynamic resource with URI template ────────────────────────────────
+
 @app.resource(
     uri="data://articles/{article_id}",
     name="article_by_id",
@@ -44,14 +56,15 @@ def get_static_users() -> List[dict]:
 )
 def get_article(article_id: int) -> dict:
     """Fetch an article by ID."""
-    # In a real app, you'd fetch this from a database
     articles = {
-        1: {"id": 1, "title": "Introduction to ProdMCP", "content": "ProdMCP is a production layer for FastMCP."},
-        2: {"id": 2, "title": "Advanced Resources", "content": "Learn how to use dynamic URIs in resources."},
+        1: {"id": 1, "title": "Introduction to ProdMCP",  "content": "ProdMCP is a unified framework."},
+        2: {"id": 2, "title": "Advanced Resources",        "content": "Learn dynamic URIs in resources."},
     }
     return articles.get(article_id, {"id": 0, "title": "Not Found", "content": ""})
 
-# 5. Define a resource with tags and custom mime type
+
+# ── Resource with tags and custom MIME type ───────────────────────────
+
 @app.resource(
     uri="config://web/settings",
     name="web_settings",
@@ -67,8 +80,30 @@ def get_web_settings() -> dict:
         "api_endpoint": "https://api.example.com/v1"
     }
 
+
+# ── v0.3.0: Stacked resource + REST endpoint ──────────────────────────
+# The same handler is exposed as both:
+#   MCP resource:  data://users
+#   REST endpoint: GET /users
+
+@app.common(output_schema=List[User])
+@app.resource(uri="data://users", name="users_resource", description="All users.")
+@app.get("/users", response_model=List[User], tags=["users"])
+def list_users() -> List[dict]:
+    """List all users (available via MCP resource AND REST GET)."""
+    return [
+        {"id": 1, "name": "Alice", "avatar_url": "https://example.com/alice.png"},
+        {"id": 2, "name": "Bob",   "avatar_url": "https://example.com/bob.png"},
+    ]
+
+
 if __name__ == "__main__":
-    # Export OpenMCP spec to see how resources are defined
+    # Export OpenMCP spec
     print(app.export_openmcp_json())
-    # To run the server:
-    # app.run()
+
+    print("\nRegistered resources:", app.list_resources())
+    print("Registered API routes:", app.list_api_routes())
+
+    # Run options (v0.3.0):
+    # app.run()                   # Unified: REST at / and MCP at /mcp (default)
+    # app.run(transport="stdio")  # Pure MCP over stdin/stdout

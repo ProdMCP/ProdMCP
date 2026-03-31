@@ -115,7 +115,8 @@ class TestFullFlow:
         # Security schemes
         sec_schemes = spec["components"]["securitySchemes"]
         assert "bearerAuth" in sec_schemes
-        assert "apiKeyAuth" in sec_schemes
+        # apiKey scheme gets auto-generated names like apiKeyAuth_header_X-API-Key
+        assert any(k.startswith("apiKeyAuth") for k in sec_schemes)
 
     def test_spec_json_roundtrip(self):
         app = self._build_app()
