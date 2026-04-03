@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [0.3.1] — 2026-04-03
+
+### ✅ Enterprise Compliance & Security
+- **FOSSA Integration**: Added FOSSA `.fossa.yml` pipeline scanning for License policy compliance and security vulnerability monitoring.
+- **SonarCloud Integration**: Setup native Github Actions for SonarQube/SonarCloud.
+- **CodeQL (SAST)**: Added GitHub advanced security static analysis workflow.
+- **Security Dependency Bumps**: Enforced `fastmcp>=3.2.0`, `fastapi>=0.109.1`, and `pydantic>=2.10.0` to resolve CVSS high/medium vulnerabilities.
+- **Refactor (Maintainability)**: Resolved 24 SonarCloud Python Code Smells (variable naming, unused local variables, nested blocks). Resulting in a perfect 'A' maintainability grade and 83.9% Test Coverage.
+
+---
 ## [0.3.0] — 2026-04-01
 
 ### ✨ Highlights
