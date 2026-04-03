@@ -4,7 +4,6 @@ The deferred registration pattern ensures @app.common() (which executes
 last in Python's decorator order) can feed config into @app.tool() etc.
 """
 
-import pytest
 from pydantic import BaseModel
 
 from prodmcp.app import ProdMCP

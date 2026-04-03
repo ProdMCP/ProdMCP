@@ -7,7 +7,6 @@ Validates all decorator combinations work correctly:
 - common + prompt
 """
 
-import pytest
 from pydantic import BaseModel
 
 from prodmcp.app import ProdMCP

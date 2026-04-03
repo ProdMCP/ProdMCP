@@ -1,0 +1,44 @@
+
+ prodmcp.security.http.HTTPBearerQ
+G/Users/muruga/Projects/ProdMCP-org/ProdMCP/src/prodmcp/security/http.py ("4"5*T
+3	
+http.py20
+ (
+%1" prodmcp.security.http.HTTPBearer"
+ (
+
+%1*T
+4 (@
+>
+ (
+%2"__id*&
+
+__unknown_file (
+
+
+scopes*
+6*j
+5  ("
+  ("
+%3"list<
+:
+  ("
+%2"__id*"
+
+__unknown_file (
+
+%3*
+6*z
+6! ("f
+d
+ ("."
+ prodmcp.security.http.HTTPBearer"
+scopes"__id*"
+
+__unknown_file (
+
+%2*
+3:
+ (6
+scopesB$"
+ prodmcp.security.http.HTTPBearerH

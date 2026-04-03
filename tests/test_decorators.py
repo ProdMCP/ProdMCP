@@ -1,6 +1,5 @@
 """Tests for the decorator layer and ProdMCP app registration."""
 
-import pytest
 from pydantic import BaseModel
 
 from prodmcp.app import ProdMCP

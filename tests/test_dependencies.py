@@ -1,6 +1,5 @@
 """Tests for Depends() evaluation and inspection."""
 
-import inspect
 
 import pytest
 

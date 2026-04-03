@@ -1,6 +1,5 @@
 """Tests for @app.common() decorator and its merging behavior."""
 
-import pytest
 from pydantic import BaseModel
 
 from prodmcp.app import ProdMCP

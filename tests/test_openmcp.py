@@ -1,10 +1,8 @@
 """Tests for OpenMCP spec generation."""
 
-import pytest
 from pydantic import BaseModel
 
 from prodmcp.app import ProdMCP
-from prodmcp.openmcp import generate_spec, spec_to_json
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────
@@ -125,7 +123,7 @@ class TestGenerateSpec:
 class TestSpecToJson:
     def test_serialization(self):
         app = _create_app_with_entities()
-        spec = app.export_openmcp()
+        app.export_openmcp()
         json_str = app.export_openmcp_json()
         assert '"openmcp": "1.0.0"' in json_str
         assert '"TestServer"' in json_str

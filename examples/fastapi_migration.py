@@ -12,7 +12,7 @@ After (ProdMCP):
 """
 
 # ── The ONLY line that changes ─────────────────────────────────────────
-from prodmcp import ProdMCP as FastAPI, Depends, HTTPException
+from prodmcp import ProdMCP as FastAPI, HTTPException
 # ── Everything below is IDENTICAL to a standard FastAPI app ────────────
 
 from pydantic import BaseModel

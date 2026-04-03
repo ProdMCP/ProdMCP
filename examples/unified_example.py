@@ -15,7 +15,7 @@ Run:
 
 from pydantic import BaseModel, Field
 
-from prodmcp import ProdMCP, BearerAuth, Depends, LoggingMiddleware
+from prodmcp import ProdMCP, BearerAuth, LoggingMiddleware
 
 
 # ── Schemas ────────────────────────────────────────────────────────────

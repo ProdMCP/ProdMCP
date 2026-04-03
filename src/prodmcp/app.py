@@ -16,15 +16,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import Any, Callable, Sequence, Type
+from typing import Any, Callable, Type
 
 from pydantic import BaseModel
 
 from .dependencies import Depends, resolve_dependencies
-from .exceptions import ProdMCPSecurityError, ProdMCPValidationError
 from .middleware import Middleware, MiddlewareManager, build_middleware_chain
 from .openmcp import generate_spec, spec_to_json
-from .schemas import resolve_schema, validate_data
 from .security import SecurityManager, SecurityScheme
 from .validation import create_validated_handler
 

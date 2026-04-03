@@ -1,6 +1,5 @@
 """Tests for the ProdMCP constructor and initialization."""
 
-import pytest
 
 from prodmcp.app import ProdMCP
 

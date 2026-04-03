@@ -1,4 +1,3 @@
-import asyncio
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from prodmcp.app import ProdMCP

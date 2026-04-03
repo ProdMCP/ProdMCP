@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Type
+from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +30,9 @@ def create_unified_app(app: "ProdMCP") -> Any:
         A Starlette/ASGI application suitable for uvicorn.run().
     """
     try:
-        from fastapi import FastAPI, Request, Depends as FastAPIDepends, HTTPException
-        from starlette.routing import Mount
-        from pydantic import BaseModel, create_model
+        from fastapi import FastAPI, Request, Depends as FastAPIDepends, HTTPException  # noqa: F401
+        from starlette.routing import Mount  # noqa: F401
+        from pydantic import BaseModel, create_model  # noqa: F401
     except ImportError as exc:
         raise ImportError(
             "FastAPI and Starlette are required for the unified server. "

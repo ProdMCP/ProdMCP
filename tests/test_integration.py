@@ -5,7 +5,6 @@ Tests the full flow: define entities → export OpenMCP spec → validate struct
 
 import json
 
-import pytest
 from pydantic import BaseModel
 
 from prodmcp import ProdMCP, LoggingMiddleware

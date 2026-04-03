@@ -6,7 +6,6 @@ Ensures that the public API surface is correct for:
 - Native usage (from prodmcp import ProdMCP, BearerAuth, ...)
 """
 
-import pytest
 
 
 class TestPublicImports:

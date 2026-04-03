@@ -8,7 +8,6 @@ These tests cover unusual scenarios that could occur in production use:
 - Decorator order variations
 """
 
-import pytest
 from pydantic import BaseModel
 
 from prodmcp.app import ProdMCP
@@ -129,7 +128,6 @@ class TestToolEdgeCases:
     def test_tool_handler_is_preserved(self):
         """The original function should be returned by the decorator."""
         app = ProdMCP("T")
-        original_id = None
 
         @app.tool(name="preserved")
         def my_fn():

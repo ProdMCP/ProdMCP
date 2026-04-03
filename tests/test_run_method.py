@@ -1,6 +1,5 @@
 """Tests for the run() method behavior."""
 
-import pytest
 from unittest.mock import patch, MagicMock
 
 from prodmcp.app import ProdMCP

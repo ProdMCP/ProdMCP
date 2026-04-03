@@ -103,11 +103,11 @@ class TestFastAPIDropIn:
         assert app.name == "TestAPI"
 
     def test_httpexception_import(self):
-        from prodmcp import ProdMCP as FastAPI, HTTPException
+        from prodmcp import HTTPException
         assert HTTPException is not None
 
     def test_depends_import(self):
-        from prodmcp import ProdMCP as FastAPI, Depends
+        from prodmcp import Depends
         assert Depends is not None
 
     def test_get_decorator_exists(self):
@@ -137,7 +137,7 @@ class TestFastAPIDropIn:
 
     def test_full_fastapi_pattern(self):
         """A realistic FastAPI-style app should work with ProdMCP."""
-        from prodmcp import ProdMCP as FastAPI, Depends, HTTPException
+        from prodmcp import ProdMCP as FastAPI, HTTPException
 
         app = FastAPI(title="UserService", version="1.0.0")
 
@@ -174,7 +174,7 @@ class TestFastAPIDropIn:
     @pytest.mark.skipif(not HAS_FASTAPI, reason="FastAPI not installed")
     def test_fastapi_pattern_with_testclient(self):
         """A full FastAPI-style app should respond correctly via TestClient."""
-        from prodmcp import ProdMCP as FastAPI, HTTPException
+        from prodmcp import ProdMCP as FastAPI
         from prodmcp.router import create_unified_app
 
         app = FastAPI(title="UserService", version="1.0.0")

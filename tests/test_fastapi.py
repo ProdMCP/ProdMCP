@@ -2,8 +2,8 @@
 
 import pytest
 try:
-    from fastapi.testclient import TestClient
-    import httpx
+    from fastapi.testclient import TestClient  # noqa: F401
+    import httpx  # noqa: F401
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
@@ -120,7 +120,6 @@ async def test_fastapi_comprehensive():
 async def test_fastapi_security_and_validation():
     from unittest.mock import MagicMock
     from fastapi.testclient import TestClient
-    from prodmcp.security import BearerAuth
     
     app = ProdMCP("SecurityTestServer")
     app._mcp = MagicMock()

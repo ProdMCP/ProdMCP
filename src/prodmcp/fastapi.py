@@ -10,8 +10,8 @@ import logging
 from typing import TYPE_CHECKING, Any, Callable, Type
 
 try:
-    from fastapi import Depends, FastAPI, HTTPException, Request
-    from pydantic import BaseModel, create_model
+    from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: F401
+    from pydantic import BaseModel, create_model  # noqa: F401
 except ImportError as exc:
     raise ImportError(
         "FastAPI is required for the REST bridge. "

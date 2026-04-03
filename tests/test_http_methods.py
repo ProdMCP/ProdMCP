@@ -3,7 +3,6 @@
 These must have identical signatures to FastAPI's decorators.
 """
 
-import pytest
 from pydantic import BaseModel
 
 from prodmcp.app import ProdMCP

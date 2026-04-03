@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any, TYPE_CHECKING
 
-from .schemas import extract_schema_ref, resolve_schema
+from .schemas import extract_schema_ref
 
 if TYPE_CHECKING:
     from .app import ProdMCP
