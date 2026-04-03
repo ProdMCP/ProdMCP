@@ -147,9 +147,8 @@ class MiddlewareManager:
                     named = self._named.get(mw)
                     if named and named not in chain:
                         chain.append(named)
-                elif isinstance(mw, Middleware):
-                    if mw not in chain:
-                        chain.append(mw)
+                elif isinstance(mw, Middleware) and mw not in chain:
+                    chain.append(mw)
         return chain
 
     async def execute_before(

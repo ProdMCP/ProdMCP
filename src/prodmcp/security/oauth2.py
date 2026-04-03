@@ -11,22 +11,25 @@ from .base import SecurityContext, SecurityScheme
 logger = logging.getLogger(__name__)
 
 
+BEARER_PREFIX = "Bearer "
+ERROR_MISSING_BEARER = "Missing or invalid OAuth2 Bearer token"
+
 class OAuth2PasswordBearer(SecurityScheme):
     """OAuth2 Password flow via Bearer token."""
 
     scheme_type = "oauth2"
 
-    def __init__(self, tokenUrl: str, scopes: dict[str, str] | None = None) -> None:
-        self.tokenUrl = tokenUrl
+    def __init__(self, token_url: str, scopes: dict[str, str] | None = None) -> None:
+        self.token_url = token_url
         self.scopes_description = scopes or {}
 
     def extract(self, context: dict[str, Any]) -> SecurityContext:
         headers: dict[str, str] = context.get("headers", {})
         auth_header = headers.get("authorization", headers.get("Authorization", ""))
 
-        if not auth_header.startswith("Bearer "):
+        if not auth_header.startswith(BEARER_PREFIX):
             raise ProdMCPSecurityError(
-                "Missing or invalid OAuth2 Bearer token", scheme="oauth2"
+                ERROR_MISSING_BEARER, scheme="oauth2"
             )
 
         token = auth_header[7:]
@@ -37,7 +40,7 @@ class OAuth2PasswordBearer(SecurityScheme):
             "type": "oauth2",
             "flows": {
                 "password": {
-                    "tokenUrl": self.tokenUrl,
+                    "tokenUrl": self.token_url,
                     "scopes": self.scopes_description,
                 }
             },
@@ -51,21 +54,21 @@ class OAuth2AuthorizationCodeBearer(SecurityScheme):
 
     def __init__(
         self,
-        authorizationUrl: str,
-        tokenUrl: str,
+        authorization_url: str,
+        token_url: str,
         scopes: dict[str, str] | None = None,
     ) -> None:
-        self.authorizationUrl = authorizationUrl
-        self.tokenUrl = tokenUrl
+        self.authorization_url = authorization_url
+        self.token_url = token_url
         self.scopes_description = scopes or {}
 
     def extract(self, context: dict[str, Any]) -> SecurityContext:
         headers: dict[str, str] = context.get("headers", {})
         auth_header = headers.get("authorization", headers.get("Authorization", ""))
 
-        if not auth_header.startswith("Bearer "):
+        if not auth_header.startswith(BEARER_PREFIX):
             raise ProdMCPSecurityError(
-                "Missing or invalid OAuth2 Bearer token", scheme="oauth2"
+                ERROR_MISSING_BEARER, scheme="oauth2"
             )
 
         token = auth_header[7:]
@@ -76,8 +79,8 @@ class OAuth2AuthorizationCodeBearer(SecurityScheme):
             "type": "oauth2",
             "flows": {
                 "authorizationCode": {
-                    "authorizationUrl": self.authorizationUrl,
-                    "tokenUrl": self.tokenUrl,
+                    "authorizationUrl": self.authorization_url,
+                    "tokenUrl": self.token_url,
                     "scopes": self.scopes_description,
                 }
             },
@@ -91,19 +94,19 @@ class OAuth2ClientCredentialsBearer(SecurityScheme):
 
     def __init__(
         self,
-        tokenUrl: str,
+        token_url: str,
         scopes: dict[str, str] | None = None,
     ) -> None:
-        self.tokenUrl = tokenUrl
+        self.token_url = token_url
         self.scopes_description = scopes or {}
 
     def extract(self, context: dict[str, Any]) -> SecurityContext:
         headers: dict[str, str] = context.get("headers", {})
         auth_header = headers.get("authorization", headers.get("Authorization", ""))
 
-        if not auth_header.startswith("Bearer "):
+        if not auth_header.startswith(BEARER_PREFIX):
             raise ProdMCPSecurityError(
-                "Missing or invalid OAuth2 Bearer token", scheme="oauth2"
+                ERROR_MISSING_BEARER, scheme="oauth2"
             )
 
         token = auth_header[7:]
@@ -114,7 +117,7 @@ class OAuth2ClientCredentialsBearer(SecurityScheme):
             "type": "oauth2",
             "flows": {
                 "clientCredentials": {
-                    "tokenUrl": self.tokenUrl,
+                    "tokenUrl": self.token_url,
                     "scopes": self.scopes_description,
                 }
             },

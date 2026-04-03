@@ -1,5 +1,7 @@
 # ProdMCP
 
+[![FOSSA Status](https://app.fossa.com/api/projects/custom%2B61520%2Fprodmcp.svg?type=shield&issueType=license)](https://app.fossa.com/projects/custom%2B61520%2Fprodmcp?ref=badge_shield&issueType=license)
+
 > **Unified production framework for both REST APIs and MCP servers.** Drop-in replacement for FastAPI and FastMCP with schema validation, security, middleware, dependency injection, and OpenMCP spec generation.
 
 ## Installation

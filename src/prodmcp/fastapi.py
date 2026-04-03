@@ -64,7 +64,7 @@ def create_fastapi_app(app: "ProdMCP", title: str | None = None) -> FastAPI:
     # Map Prompts
     for name, meta in app._registry["prompts"].items():
         _add_prompt_route(
-            fastapi_app, app, name, meta, get_security_context, _ensure_pydantic
+            fastapi_app, name, meta, _ensure_pydantic
         )
 
     # Single wild-card route for URL-encoded Resources
@@ -85,7 +85,7 @@ def _add_tool_route(
     in_schema = meta["input_schema"]
     out_schema = meta["output_schema"]
 
-    ModelClass = _ensure_pydantic(f"Tool{name.capitalize()}Input", in_schema)
+    model_class = _ensure_pydantic(f"Tool{name.capitalize()}Input", in_schema)
 
     wrapped_handler = app._build_handler(
         handler_fn,
@@ -119,7 +119,7 @@ def _add_tool_route(
                 raise
             raise HTTPException(status_code=500, detail=str(e)) from e
 
-    if ModelClass:
+    if model_class:
         async def typed_route_handler(
             request: Request,
             sec_ctx: dict[str, Any] = Depends(get_security_context),
@@ -132,7 +132,7 @@ def _add_tool_route(
 
         sig = inspect.signature(typed_route_handler)
         params = list(sig.parameters.values())
-        params[-1] = params[-1].replace(annotation=ModelClass)
+        params[-1] = params[-1].replace(annotation=model_class)
         typed_route_handler.__signature__ = sig.replace(parameters=params)
 
         handler_to_use = typed_route_handler
@@ -166,17 +166,15 @@ def _add_tool_route(
 
 def _add_prompt_route(
     fastapi_app: FastAPI,
-    app: "ProdMCP",
     name: str,
     meta: dict[str, Any],
-    get_security_context: Callable,
     _ensure_pydantic: Callable,
 ) -> None:
     handler_fn = meta["handler"]
     in_schema = meta["input_schema"]
     out_schema = meta["output_schema"]
 
-    ModelClass = _ensure_pydantic(f"Prompt{name.capitalize()}Input", in_schema)
+    model_class = _ensure_pydantic(f"Prompt{name.capitalize()}Input", in_schema)
 
     from .validation import create_validated_handler
 
@@ -206,7 +204,7 @@ def _add_prompt_route(
                 raise
             raise HTTPException(status_code=500, detail=str(e)) from e
 
-    if ModelClass:
+    if model_class:
         async def typed_route_handler(
             payload: Any = None,
         ) -> Any:
@@ -215,7 +213,7 @@ def _add_prompt_route(
 
         sig = inspect.signature(typed_route_handler)
         params = list(sig.parameters.values())
-        params[0] = params[0].replace(annotation=ModelClass)
+        params[0] = params[0].replace(annotation=model_class)
         typed_route_handler.__signature__ = sig.replace(parameters=params)
 
         handler_to_use = typed_route_handler

@@ -16,8 +16,8 @@ class OpenIdConnect(SecurityScheme):
 
     scheme_type = "openIdConnect"
 
-    def __init__(self, openIdConnectUrl: str) -> None:
-        self.openIdConnectUrl = openIdConnectUrl
+    def __init__(self, open_id_connect_url: str) -> None:
+        self.open_id_connect_url = open_id_connect_url
 
     def extract(self, context: dict[str, Any]) -> SecurityContext:
         headers: dict[str, str] = context.get("headers", {})
@@ -34,5 +34,5 @@ class OpenIdConnect(SecurityScheme):
     def to_spec(self) -> dict[str, Any]:
         return {
             "type": "openIdConnect",
-            "openIdConnectUrl": self.openIdConnectUrl,
+            "openIdConnectUrl": self.open_id_connect_url,
         }

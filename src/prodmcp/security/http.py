@@ -55,7 +55,7 @@ class HTTPBasicAuth(SecurityScheme):
             )
 
         try:
-            prefix, encoded = auth_header.split(" ", 1)
+            _, encoded = auth_header.split(" ", 1)
             decoded = base64.b64decode(encoded).decode("utf-8")
             username, password = decoded.split(":", 1)
         except Exception as e:
