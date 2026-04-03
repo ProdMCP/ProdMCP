@@ -174,7 +174,7 @@ class TestNewSecuritySchemes:
 
     def test_oauth2_password_bearer(self):
         from prodmcp.security import OAuth2PasswordBearer
-        scheme = OAuth2PasswordBearer(tokenUrl="https://example.com/token", scopes={"read": "Read access"})
+        scheme = OAuth2PasswordBearer(token_url="https://example.com/token", scopes={"read": "Read access"})
         
         ctx = scheme.extract({"headers": {"authorization": "Bearer super_token"}})
         assert ctx.token == "super_token"
@@ -186,7 +186,7 @@ class TestNewSecuritySchemes:
 
     def test_open_id_connect(self):
         from prodmcp.security import OpenIdConnect
-        scheme = OpenIdConnect(openIdConnectUrl="https://example.com/.well-known/openid-configuration")
+        scheme = OpenIdConnect(open_id_connect_url="https://example.com/.well-known/openid-configuration")
         
         ctx = scheme.extract({"headers": {"authorization": "Bearer oidc_token"}})
         assert ctx.token == "oidc_token"

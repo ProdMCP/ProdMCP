@@ -18,7 +18,7 @@ def test_dependency_stripping_and_injection():
     from unittest.mock import MagicMock
     app = ProdMCP()
     app._mcp = MagicMock()
-    oauth_scheme = OAuth2PasswordBearer(tokenUrl="/auth")
+    oauth_scheme = OAuth2PasswordBearer(token_url="/auth")
 
     @app.tool()
     def my_secured_tool(

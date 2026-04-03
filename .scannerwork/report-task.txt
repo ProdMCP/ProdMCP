@@ -1,7 +1,0 @@
-organization=prodmcp
-projectKey=prodmcp_ProdMCP
-serverUrl=https://sonarcloud.io
-serverVersion=8.0.0.84764
-dashboardUrl=https://sonarcloud.io/dashboard?id=prodmcp_ProdMCP
-ceTaskId=AZ1VNnJ91YBow9-A3Jkj
-ceTaskUrl=https://sonarcloud.io/api/ce/task?id=AZ1VNnJ91YBow9-A3Jkj

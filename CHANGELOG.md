@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [0.3.3] — 2026-04-03
+
+### ✅ Code Quality & Cache Cleanup
+- **🧹 Cleanup**: Removed SonarCloud `.scannerwork/` cache artifacts that were inadvertently committed to the repository source.
+- **✨ Formatting**: Applied global `ruff` autoformatting and standard lint repairs.
+
+---
 ## [0.3.1] — 2026-04-03
 
 ### ✅ Enterprise Compliance & Security

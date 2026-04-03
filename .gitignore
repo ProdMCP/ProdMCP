@@ -15,3 +15,6 @@ dist/
 .DS_Store
 .env
 .local/
+.scannerwork/
+coverage.xml
+fossa.debug.zip
