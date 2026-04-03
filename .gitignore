@@ -13,3 +13,5 @@ dist/
 *.pyo
 *.pyd
 .DS_Store
+.env
+.local/

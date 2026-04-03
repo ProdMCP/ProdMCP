@@ -1,0 +1,38 @@
+name: FOSSA License Compliance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  fossa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[rest]"
+          pip freeze > requirements.txt
+
+      - name: Install FOSSA CLI
+        run: |
+          curl -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/fossas/fossa-cli/master/install-latest.sh | bash
+
+      - name: Run FOSSA Analyze
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+        run: fossa analyze
+
+      - name: Run FOSSA Test
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+        run: fossa test
