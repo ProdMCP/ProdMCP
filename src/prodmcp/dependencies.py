@@ -71,8 +71,15 @@ async def resolve_dependencies(
             continue
 
         default = param.default
-        if isinstance(default, Depends):
-            dep_key = default.dependency  # C1 fix: hashable callable, not id()
+        # Bug 3/5 fix: duck-type Depends detection — recognise fastapi.Depends too.
+        # Both prodmcp.Depends and fastapi.Depends expose a .dependency callable.
+        is_depends = isinstance(default, Depends) or (
+            default is not inspect.Parameter.empty
+            and hasattr(default, "dependency")
+            and callable(getattr(default, "dependency", None))
+        )
+        if is_depends:
+            dep_key = default.dependency  # hashable callable (C1 fix)
 
             # Use cached result if allowed
             if default.use_cache and dep_key in cache:
@@ -97,36 +104,76 @@ async def _call_dependency(
     """Call a dependency function, supporting both sync and async.
 
     Context injection rules (in priority order):
-    1. Parameters named exactly ``"context"`` receive the full request context dict.
-    2. Parameters annotated as ``dict`` (or ``dict[str, Any]``) receive the context.
-    3. Parameters with a ``Depends()`` default are resolved recursively.
-    4. Parameters that have a non-Depends default use that default (not injected).
-    5. Any required parameter that cannot be resolved triggers a ``UserWarning``
-       (the call will then fail with ``TypeError``, surfacing the real error).
+    1. Parameters with a ``Depends()`` default (ProdMCP *or* FastAPI duck-type)
+       are resolved recursively.
+    2. Parameters named ``"context"`` or annotated as ``dict`` receive the full
+       request context dict.
+    3. Parameters whose type annotation is ``HTTPAuthorizationCredentials`` or
+       whose name is ``"credentials"``/``"authorization"`` are synthesised from
+       the ``Authorization`` request header.
+    4. Parameters whose name matches a top-level key in the context dict receive
+       that value directly (e.g. ``headers``, ``query_params``, ``cookies``).
+    5. Any remaining required parameter (no default, no injection path) emits a
+       ``UserWarning`` — the call will then fail with ``TypeError``.
     """
     sig = inspect.signature(dep_fn)
     kwargs: dict[str, Any] = {}
 
     for param_name, param in sig.parameters.items():
-        if isinstance(param.default, Depends):
-            # Nested dependency — resolve recursively
-            nested = await _call_dependency(param.default.dependency, context)
+        param_default = param.default
+
+        # Rule 1: Depends() — duck-typed to support both prodmcp.Depends and fastapi.Depends
+        # Bug 5 fix: the old code only checked isinstance(param.default, Depends),
+        # which missed fastapi.Depends. Use the same duck-type heuristic as Bug 3.
+        is_depends = isinstance(param_default, Depends) or (
+            param_default is not inspect.Parameter.empty
+            and hasattr(param_default, "dependency")
+            and callable(getattr(param_default, "dependency", None))
+        )
+        if is_depends:
+            nested = await _call_dependency(param_default.dependency, context)
             kwargs[param_name] = nested
-        elif _param_wants_context(param_name, param):
-            # C2 fix: inject context for params named 'context' OR annotated as dict.
-            # Previously ONLY the literal name 'context' was handled; any other
-            # param name (e.g. 'ctx', 'request_context', 'headers: dict') would
-            # silently receive no value and cause a TypeError at call time.
+            continue
+
+        # Rule 2: context-typed params (name == "context" or annotated as dict)
+        if _param_wants_context(param_name, param):
             kwargs[param_name] = context
-        elif param.default is inspect.Parameter.empty:
-            # C2 fix: required param with no default and no injection path.
-            # Warn so developers see the misconfiguration instead of a cryptic TypeError.
+            continue
+
+        # Rule 3: credentials-typed params — synthesise from Authorization header.
+        # Bug 5 fix: FastAPI's idiomatic auth pattern uses parameters named
+        # "credentials" with type HTTPAuthorizationCredentials (or similar).
+        # ProdMCP's context dict stores headers but never injected them for
+        # non-"context"-named params, so the entire auth chain produced None.
+        annotation = param.annotation
+        annotation_name = getattr(annotation, "__name__", "") or getattr(
+            getattr(annotation, "__class__", None), "__name__", ""
+        )
+        is_credentials_param = (
+            param_name in ("credentials", "authorization")
+            or "AuthorizationCredentials" in annotation_name
+            or "Credentials" in annotation_name
+        )
+        if is_credentials_param:
+            cred_obj = _extract_credentials(context)
+            if cred_obj is not None:
+                kwargs[param_name] = cred_obj
+            # else: leave unset — Python will use the default (or TypeError on call)
+            continue
+
+        # Rule 4: inject by matching context key directly (e.g. headers, query_params)
+        if param_name in context:
+            kwargs[param_name] = context[param_name]
+            continue
+
+        # Rule 5: required param with no injection path — warn
+        if param_default is inspect.Parameter.empty:
             import warnings
             warnings.warn(
                 f"Dependency {getattr(dep_fn, '__name__', repr(dep_fn))!r}: "
                 f"required parameter {param_name!r} cannot be resolved from the "
-                "request context. Name it 'context' or annotate it as 'dict' to "
-                "receive the context dict, or give it a default value.",
+                "request context. Name it 'context', annotate it as 'dict', or "
+                "give it a default value.",
                 UserWarning,
                 stacklevel=3,
             )
@@ -135,6 +182,39 @@ async def _call_dependency(
     if inspect.iscoroutinefunction(dep_fn):
         return await dep_fn(**kwargs)
     return dep_fn(**kwargs)
+
+
+def _extract_credentials(context: dict[str, Any]) -> Any:
+    """Extract an HTTPAuthorizationCredentials-like object from the request context.
+
+    Parses the ``Authorization`` header (case-insensitive) and returns an object
+    with ``.scheme`` and ``.credentials`` attributes, compatible with FastAPI's
+    ``HTTPAuthorizationCredentials``.
+
+    Returns ``None`` if no Authorization header is present.
+    """
+    headers: dict[str, str] = context.get("headers", {})
+    # Headers dict from FastAPI/Starlette uses lowercase keys
+    auth_value = headers.get("authorization") or headers.get("Authorization", "")
+    if not auth_value:
+        return None
+
+    scheme, _, credentials = auth_value.partition(" ")
+    if not credentials:
+        # Malformed — treat entire value as credentials with empty scheme
+        scheme, credentials = "", auth_value
+
+    # Return a lightweight credentials object compatible with FastAPI's
+    # HTTPAuthorizationCredentials (duck-typed — no FastAPI import required).
+    class _Credentials:
+        def __init__(self, scheme: str, credentials: str) -> None:
+            self.scheme = scheme
+            self.credentials = credentials
+
+        def __repr__(self) -> str:
+            return f"Credentials(scheme={self.scheme!r})"
+
+    return _Credentials(scheme=scheme, credentials=credentials)
 
 
 def _param_wants_context(param_name: str, param: inspect.Parameter) -> bool:

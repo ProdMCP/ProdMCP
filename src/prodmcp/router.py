@@ -150,10 +150,18 @@ def _add_api_route(
     response_class = meta.get("response_class")
     responses = meta.get("responses")
 
-    # Check if we need to apply ProdMCP security/middleware wrapping
-    security_config = meta.get("security")
-    middleware_config = meta.get("middleware")
-    input_schema = meta.get("input_schema")
+    # Bug 4 fix: resolve __prodmcp_common__ at route-build time (create_unified_app).
+    # Decorators execute bottom-up, so @app.common() runs and sets __prodmcp_common__
+    # BEFORE @app.get/@app.post writes the registry entry. The registry therefore
+    # always contains security=None/middleware=None for @app.common() routes.
+    # By reading fn.__prodmcp_common__ here (lazily, not at decoration time) we
+    # capture the final merged config — identical to how _finalize_pending() does
+    # it for MCP tools.  Explicit per-route values still take precedence.
+    common_cfg = getattr(handler_fn, "__prodmcp_common__", {})
+
+    security_config = meta.get("security") or common_cfg.get("security")
+    middleware_config = meta.get("middleware") or common_cfg.get("middleware")
+    input_schema = meta.get("input_schema") or common_cfg.get("input_schema")
 
     if security_config or middleware_config or input_schema:
         # Build a ProdMCP-wrapped handler

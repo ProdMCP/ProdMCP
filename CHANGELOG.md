@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [0.3.5] — 2026-04-06
+
+### 🐛 Critical Security & DI Bug Fixes (Bugs 3, 4, 5)
+
+#### Fixed
+
+- **`app.py` — `fastapi.Depends` silently ignored** (`Bug 3`): `_build_handler()` used `isinstance(param.default, Depends)` which only matched ProdMCP's own `Depends` class. Users importing `from fastapi import Depends` (the natural instinct for a FastAPI drop-in) would have their dependencies unresolved — security chains, rate-limiters, and audit-loggers silently no-op'd. Fixed with a duck-type check on `.dependency` callable attribute, matching both implementations. Applied in `_build_handler()`, `resolve_dependencies()`, and `_call_dependency()`.
+
+- **`router.py` — `@app.common(security=...)` not applied to REST routes** (`Bug 4`): Decorators execute bottom-up, so `@app.common()` fires and writes `fn.__prodmcp_common__` *before* `@app.get/@app.post` writes the registry entry with `security=None`. `_add_api_route()` read only from the registry and never inspected `__prodmcp_common__`, leaving every HTTP REST route **completely unauthenticated** when security was declared via `@app.common()`. The matching MCP tool version was correctly secured — the asymmetry was invisible. Fixed by reading `handler_fn.__prodmcp_common__` lazily at `create_unified_app()` time, mirroring what `_finalize_pending()` does for MCP tools.
+
+- **`dependencies.py` — `_call_dependency` only injected params named `"context"`** (`Bug 5`): Any FastAPI-idiomatic dependency using `credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())` would receive `None` for `credentials` — the entire Bearer token auth chain silently produced `None` then crashed with `AttributeError: 'NoneType'.credentials`. Fixed with a four-rule injection hierarchy: (1) duck-typed `Depends` recursion, (2) `context`-named or `dict`-annotated params get the full context, (3) `credentials`/`authorization`-named params or `HTTPAuthorizationCredentials`-annotated params get a synthesised credentials object parsed from the `Authorization` header, (4) params matching a top-level context key receive it directly.
+
+#### Other
+
+- **`README.md`** — Replaced failing FOSSA dynamic badge (live endpoint returning error image) with a static shields.io badge. Updated PyPI badge to v0.3.5.
+
+---
+
 ## [0.3.4] — 2026-04-06
 
 ### 🧪 Test Suite Hardening, Zero-Blind-Spot Coverage & Deep Runtime Hardening

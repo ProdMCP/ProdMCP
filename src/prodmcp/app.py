@@ -797,9 +797,19 @@ class ProdMCP:
         has_dependencies = False
 
         for name, param in sig.parameters.items():
-            if isinstance(param.default, Depends):
+            param_default = param.default
+            # Bug 3 fix: duck-type Depends detection so fastapi.Depends is treated
+            # identically to prodmcp.Depends.  Both expose a `.dependency` callable.
+            # A strict isinstance() check missed fastapi.Depends entirely, leaving
+            # dependencies unresolved and security chains silently bypassed.
+            is_depends = isinstance(param_default, Depends) or (
+                param_default is not inspect.Parameter.empty
+                and hasattr(param_default, "dependency")
+                and callable(getattr(param_default, "dependency", None))
+            )
+            if is_depends:
                 has_dependencies = True
-                dep = param.default.dependency
+                dep = param_default.dependency
                 if isinstance(dep, SecurityScheme):
                     scheme_name = f"auto_{dep.scheme_type}_{id(dep)}"
                     self.add_security_scheme(scheme_name, dep)
@@ -807,10 +817,6 @@ class ProdMCP:
                     if hasattr(dep, "scopes_description"):
                         scopes = list(dep.scopes_description.keys())
                     # Bug 1 fix: only append if not already present.
-                    # _build_handler may be called multiple times on the same fn
-                    # (e.g. tool registration + test_mcp_as_fastapi() REST bridge).
-                    # Without this guard, each call appends a duplicate entry,
-                    # growing the config unboundedly.
                     if not any(scheme_name in req for req in security_config):
                         security_config.append({scheme_name: scopes})
             else:
