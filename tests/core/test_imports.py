@@ -105,6 +105,48 @@ class TestAllExports:
             assert hasattr(prodmcp, name), f"Missing export: {name}"
 
 
+class TestASGIMiddlewareExports:
+    """Bug 7: ASGI middlewares must be importable directly from prodmcp."""
+
+    def test_cors_middleware_importable(self):
+        from prodmcp import CORSMiddleware
+        # When [rest] is installed CORSMiddleware is the real Starlette class
+        assert CORSMiddleware is not None
+        assert callable(CORSMiddleware)
+
+    def test_gzip_middleware_importable(self):
+        from prodmcp import GZipMiddleware
+        assert GZipMiddleware is not None
+        assert callable(GZipMiddleware)
+
+    def test_trusted_host_middleware_importable(self):
+        from prodmcp import TrustedHostMiddleware
+        assert TrustedHostMiddleware is not None
+        assert callable(TrustedHostMiddleware)
+
+    def test_cors_middleware_is_starlette_class(self):
+        from prodmcp import CORSMiddleware
+        try:
+            from starlette.middleware.cors import CORSMiddleware as StarletteCorsMW
+            assert CORSMiddleware is StarletteCorsMW
+        except ImportError:
+            pass  # [rest] not installed — None sentinel is fine
+
+    def test_cors_usage_pattern(self):
+        """Verify the fully ProdMCP-only CORS setup pattern works end-to-end."""
+        from prodmcp import ProdMCP, CORSMiddleware
+        app = ProdMCP(title="CORSTest")
+        # Should not raise — CORSMiddleware is valid when [rest] installed
+        if CORSMiddleware is not None:
+            app.add_asgi_middleware(
+                CORSMiddleware,
+                allow_origins=["https://myapp.com"],
+                allow_methods=["GET", "POST"],
+                allow_headers=["*"],
+            )
+            assert len(app._middleware_manager.asgi_middlewares) == 1
+
+
 class TestFastAPIAlias:
     """FastAPI migration pattern: from prodmcp import ProdMCP as FastAPI."""
 

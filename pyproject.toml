@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prodmcp"
-version = "0.3.5"
+version = "0.3.6"
 description = "Unified production framework for both REST APIs and MCP servers. Drop-in replacement for FastAPI and FastMCP with schema validation, security, middleware, and OpenMCP spec generation."
 readme = "README.md"
 license = "MIT"
