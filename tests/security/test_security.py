@@ -152,7 +152,10 @@ class TestSecurityManager:
             [{"type": "bearer", "scopes": ["user"]}]
         )
         assert result == [{"bearerAuth": ["user"]}]
-        assert "bearerAuth" in mgr._schemes
+        # Bug P3-5 fix: generate_security_spec is now read-only — it no longer
+        # registers schemes into _schemes as a side effect. Scheme registration
+        # happens in app.py:_build_handler at tool/prompt registration time.
+        assert "bearerAuth" not in mgr._schemes
 
 class TestNewSecuritySchemes:
     def test_http_basic_auth(self):

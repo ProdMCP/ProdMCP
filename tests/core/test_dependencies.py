@@ -3,8 +3,8 @@
 
 import pytest
 
-from prodmcp import ProdMCP
-from prodmcp.security import Depends, OAuth2PasswordBearer
+from prodmcp import Depends, ProdMCP
+from prodmcp.security import OAuth2PasswordBearer
 
 try:
     from fastapi.testclient import TestClient

@@ -6,6 +6,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [0.3.4] — 2026-04-06
+
+### 🧪 Test Suite Hardening, Zero-Blind-Spot Coverage & Deep Runtime Hardening
+
+Major quality initiative combining three independent audit passes — eliminating 28 test blind spots and 17 source bugs found across five complete code-review passes of every module.
+
+#### Bug Fixes — Pass 5 & 6 (D/E-series, 17 bugs)
+
+- **`middleware.py` — Phase 2 pairing invariant** (`D1`): `build_middleware_chain`'s handler-failure cleanup loop did not wrap `after()` calls in `try/except`. If any `after()` raised, subsequent middlewares' `after()` hooks were skipped. B4 fixed Phase 3 (success path) but Phase 2 was missed.
+- **`app.py` — `inspect.signature` hot path** (`D2`): `_wrap_with_security` called `inspect.signature(handler)` on every request to check for `__security_context__`. Now pre-computed once at closure-creation time.
+- **`middleware.py` — `wrapped(*args)` calling convention** (`D4`): `wrapped(**kwargs)` rejected positional arguments despite `__signature__` advertising them. Now `wrapped(*args, **kwargs)`.
+- **`app.py` — O(n²) `_finalize_pending`** (`D5`): `list.pop(0)` (O(n) per call) replaced with snapshot + clear (O(n) total).
+- **`app.py` — Duplicate API route warning** (`D6`): Stacking two `@app.get(path)` on the same path silently overwrote the first handler. Now emits `UserWarning` (matching B12 for resources).
+- **`__init__.py` — Stale `__version__`** (`D7`): Hardcoded `"0.3.0"` not updated when pyproject.toml was bumped. Now uses `importlib.metadata.version("prodmcp")` with fallback.
+- **`app.py` — Prompt double middleware wrapping** (`D8`): `_register_prompt` never stored the pre-built handler in the registry. `_add_prompt_route` called `_build_handler()` again, doubling the middleware chain. Now stores and reuses `"wrapped"` key (mirrors B2 for tools).
+- **`app.py` — Bearer scope merging** (`D9`): Shorthand `{"type": "bearer"}` auto-registration kept only the first tool's scopes. Later tools' scopes were silently dropped from `components.securitySchemes`. Now merges scopes across all tools sharing `bearerAuth`.
+- **`middleware.py` — Dead `execute_before/execute_after`** (`D10`): Both methods were unreachable by the runtime and lacked the pairing invariant. Now emit `DeprecationWarning`.
+- **`fastapi.py` — `ImportError` too broad** (`E1`): `except ImportError` caught sub-import failures inside installed packages and reported them as "FastAPI not installed". Narrowed to `except ModuleNotFoundError`.
+- **`fastapi.py` — Prompt route double wrapping** (`E2`): `_add_prompt_route` always called `app._build_handler()` on the raw function. Fixed by reusing `meta["wrapped"]`.
+- **`fastapi.py` — Array body crash in prompt routes** (`E3`): `dict(body)` in `_add_prompt_route.dict_route_handler` raised `TypeError` on JSON array bodies. Same B8 pattern applied to tool routes but missed here. Now returns HTTP 422.
+- **`fastapi.py` — Resource route swallows all errors as 404** (`E4`): Outer `try/except Exception → 404` wrapped the entire `resource_route_handler`, converting registry errors and handler crashes to wrong-status 404s. Now only the FastMCP fallback call is 404-protected.
+- **`validation.py` — Output validation truthiness** (`E5`): `if output_schema:` in both async and sync paths skipped validation for falsy schemas like `{}`. Now uses `if output_schema is not None:`, matching the Bug-F fix on input validation.
+- **`security/__init__.py` — `Depends` re-exported from security** (`E6`): `Depends` is a DI primitive, not a security primitive. Removed from `prodmcp.security`; import from `prodmcp` or `prodmcp.dependencies` instead.
+- **`pyproject.toml` — `anyio` missing from `[dev]`** (`E7`): Async tests silently depended on `fastmcp`'s transitive `anyio` install. Now explicitly declared.
+
+#### Breaking Changes
+
+- `from prodmcp.security import Depends` now raises `ImportError`. Use `from prodmcp import Depends` instead.
+
+Major test quality initiative across two independent audit passes, eliminating 28 distinct test blind spots — cases where the test suite was either tautological, missed entire code paths, or accepted incorrect behavior through overly permissive assertions.
+
+#### Bug Fixes (Source Code)
+
+- **`schemas.py` — `resolve_schema(dict)` deep copy** (`P2-11`): raw dict schemas now return `deepcopy(schema)` instead of the original reference. Previously, spec generation (`_rewrite_refs`) could silently mutate a tool's stored `input_schema` through the shared reference.
+- **`fastapi.py` — Exception propagation to FastAPI handlers** (`P2-10`): `_execute_wrapped` (tool and prompt routes) converted from a broad `except Exception` catch to typed `except ProdMCPSecurityError / ProdMCPValidationError / HTTPException` clauses. Non-ProdMCP exceptions (e.g. `ValueError`) now propagate to FastAPI's custom exception handler chain — `app.add_exception_handler(ValueError, ...)` is now effective for tool errors.
+
+#### Regression Tests Added
+
+- **`tests/regression/test_regression_pass1.py`** (59 tests — Audit Pass 1): security scope validation, AND/OR semantics, RFC 7230 case-insensitive API key headers, middleware before/after pairing on failure, empty-kwargs validation, JSON Schema array/scalar/enum types, `resolve_schema` isolation, multiline docstring handling, `@app.common()` security shorthand, spec generation idempotency.
+- **`tests/regression/test_regression_pass2.py`** (38 tests — Audit Pass 2): Pydantic input coercion verified end-to-end, `BaseModel` output serialized to dict, `__security_context__` injection guard, dict schema without `properties` routable, parameterized URI resource routing (`data://{item_id}`), `_match_uri_template` multi-var and slash edge cases, `resolve_schema` raw dict isolation, duplicate tool name contract, empty app spec cleanliness, non-strict output swallow path.
+
+#### Test Assertion Tightening (Existing Tests)
+
+- `test_mcp_bridge.py` — prompt response now asserts exact content (`== "Summary: hello world"`) instead of substring prefix.
+- `test_mcp_bridge.py` — `as_fastapi()` backward-compat check uses `isinstance(fa, FastAPI)` instead of `type(x).__name__` string comparison.
+- `test_run_method.py` — SSE middleware forwarding test now verifies exhaustive keyword set `{"transport","host","port","middleware"}` instead of spot-checking two keys.
+- `test_fastapi.py` — exception handler test now asserts `status == 400` and exact body content instead of `status in (400, 500)`.
+- `test_schemas.py` — `test_dict_passthrough` updated to assert `result == raw and result is not raw` (copy semantics), replacing the identity check `result is raw` that encoded the bug.
+
+#### pytest-asyncio Resolved
+
+- `pytest-asyncio` was declared in `[project.optional-dependencies] dev` but never installed in the active environment, silently disabling 13 async tests (`test_fastapi.py`, `test_middleware.py`, `test_validation.py`). Resolved — `asyncio_mode = "auto"` now activates correctly.
+
+#### Test Suite Restructured
+
+Tests reorganised from a flat directory into 10 thematic subfolders with `__init__.py` and a `tests/tests.md` reference document:
+
+```
+tests/
+├── core/          constructors, decorators, stacking, deferred registration, edge cases
+├── validation/    schema resolution, validation engine
+├── security/      security schemes and manager
+├── middleware/    middleware chain and hooks
+├── bridge/        FastAPI bridge, MCP bridge, HTTP methods, unified router
+├── spec/          OpenMCP spec generation
+├── transport/     run() and transport selection
+├── compat/        FastMCP/FastAPI migration compatibility
+├── regression/    blind-spot regression suites (2 passes, 97 tests)
+└── integration/   end-to-end multi-component tests
+```
+
+**Total: 383 tests, 0 failures.**
+
+---
+
 ## [0.3.3] — 2026-04-03
 
 ### ✅ Code Quality & Cache Cleanup

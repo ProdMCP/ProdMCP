@@ -38,7 +38,14 @@ except ImportError:
             super().__init__(detail)
 
 
-__version__ = "0.3.0"
+# D7 fix: derive version from the installed package metadata so __version__
+# stays in sync with pyproject.toml automatically after each release bump.
+# Fallback covers editable installs that haven't regenerated dist-info.
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__: str = _pkg_version("prodmcp")
+except Exception:  # PackageNotFoundError or any import error
+    __version__ = "0.3.4"
 
 __all__ = [
     # Core

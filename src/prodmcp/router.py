@@ -39,6 +39,13 @@ def create_unified_app(app: "ProdMCP") -> Any:
             "Install them with `pip install prodmcp[rest]`."
         ) from exc
 
+    # ── Finalize pending decorator registrations ──────────────────────
+    # create_unified_app() is public — users may call it directly without
+    # going through app.run(), which would normally call _finalize_pending().
+    # Calling it here is idempotent (drain pattern) and ensures all
+    # @app.tool / @app.prompt / @app.resource decorators are processed.
+    app._finalize_pending()
+
     # ── Build the FastAPI sub-app for REST routes ──────────────────────
 
     fastapi_app = FastAPI(
@@ -46,6 +53,24 @@ def create_unified_app(app: "ProdMCP") -> Any:
         version=app.version,
         description=app.description,
     )
+
+    # ── Apply ASGI-level middlewares (e.g. CORSMiddleware) ─────────────
+    # These are registered via app.add_asgi_middleware() and must be
+    # applied here so they participate in the full Starlette ASGI pipeline.
+    # Middlewares are applied in *reverse* registration order so that the
+    # first-registered middleware is outermost (executed first on requests).
+    for mw_cfg in reversed(app._middleware_manager.asgi_middlewares):
+        fastapi_app.add_middleware(mw_cfg.cls, **mw_cfg.kwargs)
+        logger.debug(
+            "Applied ASGI middleware %s to FastAPI app", mw_cfg.cls.__name__
+        )
+
+    # ── Apply global exception handlers ────────────────────────────────
+    # Registered via app.add_exception_handler() — applied here so custom
+    # error handling survives the fresh FastAPI instantiation.
+    for exc_cls, handler in app._exception_handlers:
+        fastapi_app.add_exception_handler(exc_cls, handler)
+        logger.debug("Applied exception handler for %s", exc_cls)
 
     # Register explicit API routes from @app.get(), @app.post(), etc.
     for key, meta in app._registry.get("api", {}).items():
@@ -69,6 +94,31 @@ def create_unified_app(app: "ProdMCP") -> Any:
             )
 
         if mcp_asgi:
+            # ── Wrap the MCP sub-app with ASGI middlewares ────────────────
+            # IMPORTANT: Starlette's mount() creates an isolated ASGI scope.
+            # Middleware applied to the parent FastAPI app does NOT reach the
+            # mounted sub-app.  We therefore manually wrap mcp_asgi with the
+            # same middleware stack so that CORSMiddleware (and others) also
+            # intercept requests to /mcp/sse, /mcp/messages, etc.
+            #
+            # Middlewares must be applied in *reverse* registration order so
+            # the first-registered ends up as the outermost layer.
+            asgi_mws = app._middleware_manager.asgi_middlewares
+            if asgi_mws:
+                for mw_cfg in reversed(asgi_mws):
+                    try:
+                        mcp_asgi = mw_cfg.cls(app=mcp_asgi, **mw_cfg.kwargs)
+                        logger.debug(
+                            "Wrapped MCP sub-app with ASGI middleware %s",
+                            mw_cfg.cls.__name__,
+                        )
+                    except Exception as wrap_err:
+                        logger.warning(
+                            "Could not wrap MCP sub-app with %s: %s",
+                            mw_cfg.cls.__name__,
+                            wrap_err,
+                        )
+
             fastapi_app.mount(app.mcp_path, mcp_asgi)
             logger.info("MCP SSE mounted at %s", app.mcp_path)
     except Exception as e:
@@ -113,7 +163,14 @@ def _add_api_route(
             entity_type="api",
             entity_name=entity_name,
             input_schema=input_schema,
-            output_schema=response_model,
+            # Gap 3 fix: do NOT pass output_schema=response_model.
+            # _build_handler's output validation calls model_dump() on the
+            # result and returns a plain dict; FastAPI then tries to validate
+            # that dict against response_model again — double-serialization.
+            # This breaks alias field names and custom serializers.
+            # FastAPI's response_model handling is the correct place for REST
+            # output validation; ProdMCP handles input + security + middleware.
+            output_schema=None,
             security_config=security_config,
             entity_middleware=middleware_config,
             strict=app.strict_output,
@@ -133,9 +190,31 @@ def _add_api_route(
             except Exception:
                 body = {}
 
-            # Merge path params and body
-            kwargs = {**request.path_params, **body}
-            kwargs["__security_context__"] = sec_ctx
+            # C5 fix: guard against JSON array / scalar bodies.
+            # `{**request.path_params, **body}` raises TypeError when body is a list
+            # (e.g. client sends [1,2,3]). Return 422 instead of an unhandled 500.
+            if not isinstance(body, dict):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Request body must be a JSON object ({{}}), "
+                        f"not {type(body).__name__}."
+                    ),
+                )
+
+            # C6 fix: path parameters MUST win over body keys.
+            # The previous order ({**request.path_params, **body}) let body keys
+            # silently overwrite URL path parameters — a client could inject
+            # arbitrary values for path params like 'item_id' via the JSON body,
+            # bypassing route-level access control that depends on path params.
+            kwargs = {**body, **request.path_params}  # path params take precedence
+
+            # Bug D fix: only inject __security_context__ when security is
+            # actually configured.  Injecting it unconditionally causes
+            # TypeError on handlers that don't accept **kwargs and have no
+            # security but do have input_schema or middleware_config.
+            if security_config:
+                kwargs["__security_context__"] = sec_ctx
 
             try:
                 if is_async:
@@ -153,27 +232,42 @@ def _add_api_route(
         # Pass through directly — pure FastAPI behavior
         endpoint = handler_fn
 
-    # Build route kwargs
+    # Gap 3 fix: if response_model not set explicitly on the route, fall back
+    # to output_schema from @common().  This ensures @common(output_schema=M)
+    # propagates to the OpenAPI response schema on REST routes.
+    if response_model is None:
+        common_cfg = getattr(handler_fn, "__prodmcp_common__", None)
+        if common_cfg:
+            response_model = common_cfg.get("output_schema") or common_cfg.get("response_model")
+
+    # Gap 1 fix: response_description was stored in registry but never
+    # forwarded to FastAPI — the value was silently discarded.
+    response_description = meta.get("response_description")
+
+    # Build route kwargs — use `is not None` guards (not truthiness) so that
+    # intentionally falsy values like tags=[], deprecated=False, summary=""
+    # are correctly forwarded to FastAPI instead of being silently dropped.
     route_kwargs: dict[str, Any] = {
         "methods": [method],
         "status_code": status_code,
+        "include_in_schema": include_in_schema,
+        "deprecated": deprecated,  # always forward; False is a valid explicit value
     }
-    if tags:
+    if tags is not None:
         route_kwargs["tags"] = tags
-    if summary:
+    if summary is not None:
         route_kwargs["summary"] = summary
-    if description:
+    if description is not None:
         route_kwargs["description"] = description
-    if deprecated:
-        route_kwargs["deprecated"] = deprecated
-    if operation_id:
+    if operation_id is not None:
         route_kwargs["operation_id"] = operation_id
-    if response_model:
+    if response_model is not None:
         route_kwargs["response_model"] = response_model
-    if response_class:
+    if response_class is not None:
         route_kwargs["response_class"] = response_class
-    if responses:
+    if responses is not None:
         route_kwargs["responses"] = responses
-    route_kwargs["include_in_schema"] = include_in_schema
+    if response_description is not None:
+        route_kwargs["response_description"] = response_description
 
     fastapi_app.add_api_route(path, endpoint, **route_kwargs)

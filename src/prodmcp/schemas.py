@@ -28,9 +28,19 @@ def resolve_schema(schema: Type[BaseModel] | dict[str, Any] | None) -> dict[str,
     if schema is None:
         return None
     if isinstance(schema, dict):
-        return schema
+        # P2-11 fix: raw dict schemas must also be deep-copied so callers cannot
+        # mutate the original dict stored in tool_meta["input_schema"] / etc.
+        # The P3-N2 fix applied deepcopy only to the Pydantic branch; the dict
+        # branch was missed and would silently corrupt the schema if the caller
+        # mutated the returned value (spec-gen does this via _rewrite_refs).
+        import copy
+        return copy.deepcopy(schema)
     if isinstance(schema, type) and issubclass(schema, BaseModel):
-        return schema.model_json_schema()
+        # P3-N2 fix: model_json_schema() may return a cached dict reference.
+        # Deep-copy before returning so callers can't mutate Pydantic's internal
+        # cache (same issue as M3, fixed for extract_schema_ref but missed here).
+        import copy
+        return copy.deepcopy(schema.model_json_schema())
     raise TypeError(
         f"Schema must be a Pydantic BaseModel subclass or a dict, got {type(schema)}"
     )
@@ -102,9 +112,13 @@ def _validate_json_schema(
 ) -> Any:
     """Validate data against a raw JSON Schema dict.
 
-    Performs basic structural validation for object-type schemas.
+    Handles ``object``, ``array``, and scalar primitive types.
+    Complex combinators (``allOf``, ``anyOf``, ``oneOf``, ``$ref``) are not
+    fully evaluated — data passes through unchecked for those cases.
     """
     schema_type = schema.get("type")
+
+    # --- object ---
     if schema_type == "object":
         if not isinstance(data, dict):
             raise ProdMCPValidationError(
@@ -135,6 +149,48 @@ def _validate_json_schema(
                 f"{direction.capitalize()} validation failed: {len(errors)} error(s)",
                 errors=errors,
             )
+
+    # P3-N1 fix: handle array and scalar types; previously only "object" was
+    # checked and all other schemas silently accepted any data.
+
+    # --- array ---
+    elif schema_type == "array":
+        if not isinstance(data, list):
+            raise ProdMCPValidationError(
+                f"{direction.capitalize()} validation failed: expected array, got {type(data).__name__}",
+                errors=[{"loc": [], "msg": "expected array", "type": "type_error"}],
+            )
+        items_schema = schema.get("items")
+        if items_schema and isinstance(items_schema, dict):
+            for idx, item in enumerate(data):
+                try:
+                    _validate_json_schema(item, items_schema, direction)
+                except ProdMCPValidationError as exc:
+                    # Re-raise with index prefix in loc
+                    raise ProdMCPValidationError(
+                        f"{direction.capitalize()} validation failed at index {idx}: {exc}",
+                        errors=[{"loc": [idx, *e.get("loc", [])], **{k: v for k, v in e.items() if k != 'loc'}} for e in exc.errors],
+                    ) from exc
+
+    # --- scalars ---
+    elif schema_type in ("string", "integer", "number", "boolean"):
+        if not _check_json_type(data, schema_type):
+            raise ProdMCPValidationError(
+                f"{direction.capitalize()} validation failed: "
+                f"expected {schema_type}, got {type(data).__name__}",
+                errors=[{"loc": [], "msg": f"expected {schema_type}", "type": "type_error"}],
+            )
+
+    # --- enum ---
+    if "enum" in schema and data not in schema["enum"]:
+        raise ProdMCPValidationError(
+            f"{direction.capitalize()} validation failed: "
+            f"{data!r} is not one of {schema['enum']!r}",
+            errors=[{"loc": [], "msg": "value not in enum", "type": "enum"}],
+        )
+
+    # For $ref, allOf, anyOf, oneOf — pass through (full JSON Schema eval
+    # would require a dedicated library like jsonschema).
     return data
 
 
@@ -195,8 +251,12 @@ def extract_schema_ref(
         return None
 
     if isinstance(schema, type) and issubclass(schema, BaseModel):
+        import copy
         name = schema.__name__
-        json_schema = schema.model_json_schema()
+        # M3 fix: model_json_schema() may return a cached dict reference.
+        # Deep-copy before mutating so repeated calls for the same model class
+        # don't lose their $defs, which would break $ref resolution in the spec.
+        json_schema = copy.deepcopy(schema.model_json_schema())
         # Extract $defs if present (Pydantic v2 nests referenced models)
         defs = json_schema.pop("$defs", {})
         # Rewrite $ref paths from #/$defs/X to #/components/schemas/X

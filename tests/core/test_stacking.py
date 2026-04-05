@@ -7,6 +7,8 @@ Validates all decorator combinations work correctly:
 - common + prompt
 """
 
+import inspect
+
 from pydantic import BaseModel
 
 from prodmcp.app import ProdMCP
@@ -174,7 +176,6 @@ class TestFunctionBehaviorAfterStacking:
         assert add(3, 4) == 7
 
     def test_async_function_preserved(self):
-        import asyncio
         app = ProdMCP("T")
 
         @app.tool(name="async_adder")
@@ -182,7 +183,7 @@ class TestFunctionBehaviorAfterStacking:
         async def async_add(a: int, b: int) -> int:
             return a + b
 
-        assert asyncio.iscoroutinefunction(async_add)
+        assert inspect.iscoroutinefunction(async_add)
 
     def test_docstring_preserved(self):
         app = ProdMCP("T")

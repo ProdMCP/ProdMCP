@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from .app import ProdMCP
 
 
-def generate_spec(app: ProdMCP) -> dict[str, Any]:
+def generate_spec(app: "ProdMCP") -> dict[str, Any]:
     """Generate the full OpenMCP specification from a ProdMCP app.
 
     Args:
@@ -24,6 +24,11 @@ def generate_spec(app: ProdMCP) -> dict[str, Any]:
     Returns:
         A dict representing the OpenMCP JSON spec.
     """
+    # Bug 8 fix: generate_spec is in __all__ and callable directly.
+    # Without _finalize_pending() the registry is empty if called before
+    # app.run() or app.export_openmcp(), producing a silently empty spec.
+    app._finalize_pending()
+
     components: dict[str, Any] = {"schemas": {}, "securitySchemes": {}}
 
     # Build tools section
@@ -93,10 +98,15 @@ def _build_tools(app: ProdMCP, components: dict[str, Any]) -> dict[str, Any]:
                 security_config
             )
 
-        # Middleware
+        # Middleware — N3 fix: only include string names.
+        # Middleware instances are not JSON-serializable; including them causes
+        # json.dumps to silently emit their repr() via default=str, which is
+        # meaningless in the spec context.
         middleware = meta.get("middleware", [])
         if middleware:
-            tool_spec["middleware"] = middleware
+            serializable = [m for m in middleware if isinstance(m, str)]
+            if serializable:
+                tool_spec["middleware"] = serializable
 
         # Tags
         tags = meta.get("tags")
@@ -164,6 +174,27 @@ def _build_resources(app: ProdMCP, components: dict[str, Any]) -> dict[str, Any]
     return resources
 
 
+def _warn_on_unserializable(obj: Any) -> Any:
+    """Custom JSON ``default`` that warns before stringifying non-serializable values.
+
+    C7 fix: ``default=str`` silently embeds garbage like
+    ``"<class 'prodmcp.security.http.HTTPBearer'>"`` in the spec with no
+    indication that something is wrong.  This wrapper emits a ``UserWarning``
+    first so developers see the problem rather than getting a silently broken spec.
+    """
+    import warnings
+    warnings.warn(
+        f"spec_to_json: non-JSON-serializable value of type "
+        f"{type(obj).__name__!r} found in the OpenMCP spec; converting to its "
+        f"string representation {str(obj)!r:.80}. "
+        "This usually indicates a middleware instance or Pydantic model class "
+        "appearing in the spec dict. Check your schema/middleware configuration.",
+        UserWarning,
+        stacklevel=4,
+    )
+    return str(obj)
+
+
 def spec_to_json(spec: dict[str, Any], indent: int = 2) -> str:
     """Serialize an OpenMCP spec to a JSON string."""
-    return json.dumps(spec, indent=indent, default=str)
+    return json.dumps(spec, indent=indent, default=_warn_on_unserializable)

@@ -13,7 +13,6 @@ Supports:
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 from typing import Any, Callable, Type
@@ -33,8 +32,14 @@ _UNSET: Any = object()
 
 
 def _merge_common(fn: Callable, key: str, explicit_value: Any) -> Any:
-    """Return explicit_value if provided, else fall back to __prodmcp_common__."""
-    if explicit_value is not _UNSET and explicit_value is not None:
+    """Return explicit_value if provided, else fall back to __prodmcp_common__.
+
+    Uses ``_UNSET`` as the only sentinel — ``None``, ``False``, ``0``, and ``[]``
+    are all considered explicit values and are returned as-is.  This prevents
+    truthiness checks from silently discarding valid falsy overrides such as
+    ``strict=False`` on a tool that inherits ``strict=True`` from ``@common()``.
+    """
+    if explicit_value is not _UNSET:
         return explicit_value
     common = getattr(fn, "__prodmcp_common__", None)
     if common and key in common:
@@ -97,6 +102,11 @@ class ProdMCP:
         self._security_manager = SecurityManager()
         self._middleware_manager = MiddlewareManager()
 
+        # Global exception handlers — applied to the FastAPI app by create_unified_app()
+        # and create_fastapi_app() after building the fresh FastAPI instance.
+        # Each entry is a (exc_class_or_status_code, handler_callable) tuple.
+        self._exception_handlers: list[tuple[Any, Any]] = []
+
         # Lazy FastMCP instance
         self._mcp: Any = None
 
@@ -122,16 +132,23 @@ class ProdMCP:
         Uses a drain pattern — processes and clears pending lists each call,
         so new decorators added incrementally are still picked up.
         """
-        while self._pending_tools:
-            fn, opts = self._pending_tools.pop(0)
+        # D5 fix: snapshot + clear instead of while + pop(0).
+        # list.pop(0) is O(n) per call (shifts all remaining elements), making
+        # the full drain O(n²). Snapshot + clear is O(n) and preserves order.
+        # Items added during processing are picked up on the next _finalize_pending() call.
+        pending_tools = list(self._pending_tools)
+        self._pending_tools.clear()
+        for fn, opts in pending_tools:
             self._register_tool(fn, **opts)
 
-        while self._pending_prompts:
-            fn, opts = self._pending_prompts.pop(0)
+        pending_prompts = list(self._pending_prompts)
+        self._pending_prompts.clear()
+        for fn, opts in pending_prompts:
             self._register_prompt(fn, **opts)
 
-        while self._pending_resources:
-            fn, opts = self._pending_resources.pop(0)
+        pending_resources = list(self._pending_resources)
+        self._pending_resources.clear()
+        for fn, opts in pending_resources:
             self._register_resource(fn, **opts)
 
     # ── Middleware API ──────────────────────────────────────────────────
@@ -141,13 +158,77 @@ class ProdMCP:
         middleware: Middleware | type,
         name: str | None = None,
     ) -> None:
-        """Register global middleware.
+        """Register a global ProdMCP-level middleware (before/after hooks).
+
+        Use this for cross-cutting concerns that run *inside* the request
+        lifecycle of individual MCP tools, prompts, resources, and API
+        routes — e.g. logging, timing, rate-limiting.
+
+        For ASGI/HTTP-level middlewares such as CORS, GZip, or TrustedHost,
+        use :meth:`add_asgi_middleware` instead.
 
         Args:
-            middleware: A Middleware instance or class.
+            middleware: A :class:`~prodmcp.middleware.Middleware` instance or class.
             name: Optional name for per-entity referencing.
         """
         self._middleware_manager.add(middleware, name=name)
+
+    def add_asgi_middleware(self, cls: type, **kwargs: Any) -> None:
+        """Register an ASGI-level (Starlette/FastAPI) middleware.
+
+        These middlewares are applied directly to the underlying ``FastAPI``
+        application during :meth:`run` (via :func:`~prodmcp.router.create_unified_app`)
+        and to the app returned by :meth:`as_fastapi`.
+
+        Use this for HTTP-transport–level concerns such as CORS, GZip,
+        TrustedHost, session cookies, etc.
+
+        Example::
+
+            from fastapi.middleware.cors import CORSMiddleware
+
+            app.add_asgi_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+
+        Args:
+            cls: Starlette/FastAPI middleware class.
+            **kwargs: Arguments forwarded to the middleware constructor.
+        """
+        self._middleware_manager.add_asgi(cls, **kwargs)
+
+    def add_exception_handler(
+        self,
+        exc_class_or_status_code: type | int,
+        handler: Callable[..., Any],
+    ) -> None:
+        """Register a global HTTP exception handler.
+
+        Handlers registered here are applied to the underlying ``FastAPI``
+        application by both :func:`~prodmcp.router.create_unified_app` and
+        :func:`~prodmcp.fastapi.create_fastapi_app`, ensuring they are not
+        lost when a fresh FastAPI instance is built.
+
+        This mirrors FastAPI's own ``app.add_exception_handler()`` API.
+
+        Example::
+
+            from fastapi import Request
+            from fastapi.responses import JSONResponse
+
+            async def value_error_handler(request: Request, exc: ValueError):
+                return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+            app.add_exception_handler(ValueError, value_error_handler)
+
+        Args:
+            exc_class_or_status_code: Exception class or HTTP status code integer.
+            handler: Async (or sync) callable ``(request, exc) -> Response``.
+        """
+        self._exception_handlers.append((exc_class_or_status_code, handler))
 
     # ── Security API ───────────────────────────────────────────────────
 
@@ -185,8 +266,19 @@ class ProdMCP:
             def get_user(user_id: str) -> dict:
                 ...
         """
-        # response_model is a FastAPI alias for output_schema
-        effective_output = output_schema or response_model
+        # B3 fix: use explicit None-check instead of truthiness ('or').
+        # 'output_schema or response_model' incorrectly falls through to
+        # response_model when output_schema is any falsy-but-intentional value.
+        # Also warn when both are provided so the silent discard is visible.
+        import warnings as _w
+        if output_schema is not None and response_model is not None:
+            _w.warn(
+                "Both output_schema and response_model were passed to @app.common(); "
+                "output_schema takes precedence and response_model is ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+        effective_output = output_schema if output_schema is not None else response_model
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
             fn.__prodmcp_common__ = {
@@ -274,7 +366,11 @@ class ProdMCP:
             strict=is_strict,
         )
 
-        # Store metadata
+        # Store metadata.
+        # B2 fix: store the pre-built `wrapped` handler so create_fastapi_app()
+        # (_add_tool_route) can reuse it directly instead of calling _build_handler
+        # again on the same fn — which would double-wrap middleware and re-mutate
+        # fn.__signature__ (compounding B1).
         self._registry["tools"][tool_name] = {
             "name": tool_name,
             "description": tool_desc.strip(),
@@ -284,6 +380,7 @@ class ProdMCP:
             "middleware": eff_middleware or [],
             "tags": eff_tags,
             "handler": fn,
+            "wrapped": wrapped,   # B2: reused by _add_tool_route
             "strict": is_strict,
         }
 
@@ -334,6 +431,22 @@ class ProdMCP:
         prompt_name = name or fn.__name__
         prompt_desc = description or fn.__doc__ or ""
 
+        # Apply validation + global ProdMCP middleware hooks.
+        wrapped = self._build_handler(
+            fn,
+            entity_type="prompt",
+            entity_name=prompt_name,
+            input_schema=eff_input,
+            output_schema=eff_output,
+            security_config=None,      # prompts don't support per-entity security
+            entity_middleware=None,    # prompts don't support per-entity middleware
+            strict=False,              # prompts always use non-strict output
+        )
+
+        # D8 fix: store wrapped handler so _add_prompt_route can reuse it (mirrors
+        # the B2 fix applied to tools). Previously only raw fn was stored;
+        # _add_prompt_route called _build_handler() again, double-wrapping middleware
+        # (LoggingMiddleware fired twice per bridge call).
         self._registry["prompts"][prompt_name] = {
             "name": prompt_name,
             "description": prompt_desc.strip(),
@@ -341,14 +454,8 @@ class ProdMCP:
             "output_schema": eff_output,
             "tags": eff_tags,
             "handler": fn,
+            "wrapped": wrapped,   # D8/E2: reused by _add_prompt_route
         }
-
-        wrapped = create_validated_handler(
-            fn,
-            input_schema=eff_input,
-            output_schema=eff_output,
-            strict=False,
-        )
 
         self.mcp.prompt(
             name=prompt_name,
@@ -399,20 +506,51 @@ class ProdMCP:
         resource_desc = description or fn.__doc__ or ""
         resource_uri = uri or f"resource://{resource_name}"
 
+        # B12 fix: warn on duplicate URI registrations.
+        # Two resources with the same URI co-exist under different names, but the
+        # bridge matches only the first occurrence — the second is silently
+        # unreachable via REST. Emit a warning so developers catch it early.
+        for _existing_name, _existing_meta in self._registry["resources"].items():
+            if _existing_meta["uri"] == resource_uri:
+                import warnings as _w
+                _w.warn(
+                    f"Resource URI {resource_uri!r} is already registered under "
+                    f"name {_existing_name!r}. The new registration "
+                    f"(name={resource_name!r}) will be unreachable via the REST "
+                    "bridge (first-match wins). Check for duplicate URI registrations.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                break
+
         self._registry["resources"][resource_name] = {
             "name": resource_name,
             "description": resource_desc.strip(),
             "uri": resource_uri,
             "output_schema": eff_output,
             "tags": eff_tags,
-            "handler": fn,
+            "handler": fn,       # raw fn — for re-wrapping if needed
+            # "wrapped" is added below after building the handler
         }
 
-        wrapped = create_validated_handler(
+        # Apply validation + global ProdMCP middleware hooks.
+        # Previously only create_validated_handler() was called here, bypassing
+        # the middleware chain.  Resources now get the same hook coverage as tools.
+        wrapped = self._build_handler(
             fn,
+            entity_type="resource",
+            entity_name=resource_name,
+            input_schema=None,          # resources don't take input schemas
             output_schema=eff_output,
-            strict=False,
+            security_config=None,       # resources don't support per-entity security
+            entity_middleware=None,     # resources don't support per-entity middleware
+            strict=False,               # resources always use non-strict output
         )
+
+        # Store the wrapped handler so the REST bridge can call it directly
+        # with all security/middleware baked in (see fastapi._add_resource_route).
+        self._registry["resources"][resource_name]["wrapped"] = wrapped
+
 
         fastmcp_kwargs: dict[str, Any] = {
             "name": resource_name,
@@ -457,6 +595,15 @@ class ProdMCP:
             resolved_status = status_code if status_code is not None else default_status.get(method.upper(), 200)
 
             registry_key = f"{path}:{method.upper()}"
+            # D6 fix: warn on duplicate route registration (same as B12 for resources).
+            if registry_key in self._registry["api"]:
+                import warnings as _wr
+                _wr.warn(
+                    f"API route {method.upper()} {path!r} is already registered. "
+                    "The new handler will overwrite the existing one.",
+                    UserWarning,
+                    stacklevel=4,
+                )
             self._registry["api"][registry_key] = {
                 "path": path,
                 "method": method.upper(),
@@ -464,7 +611,12 @@ class ProdMCP:
                 "response_model": response_model,
                 "status_code": resolved_status,
                 "tags": tags,
-                "summary": summary or fn.__doc__,
+                # B7 fix: guard against whitespace-only docstrings.
+                # '   '.strip().splitlines() → [] → [][0] → IndexError at registration.
+                "summary": summary or (
+                    fn.__doc__.strip().splitlines()[0].strip()
+                    if fn.__doc__ and fn.__doc__.strip() else None
+                ),
                 "description": description,
                 "dependencies": dependencies,
                 "deprecated": deprecated,
@@ -651,10 +803,16 @@ class ProdMCP:
                 if isinstance(dep, SecurityScheme):
                     scheme_name = f"auto_{dep.scheme_type}_{id(dep)}"
                     self.add_security_scheme(scheme_name, dep)
-                    scopes = getattr(dep, "scopes", []) 
+                    scopes = getattr(dep, "scopes", [])
                     if hasattr(dep, "scopes_description"):
                         scopes = list(dep.scopes_description.keys())
-                    security_config.append({scheme_name: scopes})
+                    # Bug 1 fix: only append if not already present.
+                    # _build_handler may be called multiple times on the same fn
+                    # (e.g. tool registration + test_mcp_as_fastapi() REST bridge).
+                    # Without this guard, each call appends a duplicate entry,
+                    # growing the config unboundedly.
+                    if not any(scheme_name in req for req in security_config):
+                        security_config.append({scheme_name: scopes})
             else:
                 new_params.append(param)
 
@@ -665,19 +823,33 @@ class ProdMCP:
             async def dep_wrapper(*args: Any, **kwargs: Any) -> Any:
                 context = kwargs.pop("__request_context__", {})
                 kwargs.pop("__security_context__", None)
-                
+
                 resolved = await resolve_dependencies(fn, context, overrides=kwargs)
                 kwargs.update(resolved)
-                
-                if asyncio.iscoroutinefunction(fn):
+
+                if inspect.iscoroutinefunction(fn):
                     return await fn(*args, **kwargs)
                 return fn(*args, **kwargs)
-            
+
             dep_wrapper.__signature__ = stripped_sig
             handler = dep_wrapper
         else:
-            handler = fn
-            handler.__signature__ = stripped_sig
+            # B1 fix: do NOT assign stripped_sig to fn.__signature__ directly.
+            # handler = fn followed by handler.__signature__ = ... mutates the
+            # original function object. On stacked decorators (@app.tool + @app.get)
+            # the second call to _build_handler sees already-stripped params —
+            # Depends() detection breaks and fn is permanently corrupted.
+            # Use a thin wrapper that carries the stripped signature instead.
+            if inspect.iscoroutinefunction(fn):
+                @functools.wraps(fn)
+                async def _sig_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    return await fn(*args, **kwargs)
+            else:
+                @functools.wraps(fn)
+                def _sig_wrapper(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
+                    return fn(*args, **kwargs)
+            _sig_wrapper.__signature__ = stripped_sig
+            handler = _sig_wrapper
 
         # 1. Validation wrapping
         handler = create_validated_handler(
@@ -690,6 +862,39 @@ class ProdMCP:
 
         # 2. Security wrapping
         if security_config:
+            # Bug P3-5 fix: auto-register shorthand security schemes into
+            # _security_manager._schemes at registration time so that
+            # generate_security_spec() (called during spec export) can remain
+            # read-only — no more side-effectful scheme registration during spec gen.
+            for req in security_config:
+                if "type" in req:
+                    auth_type = req.get("type", "").lower()
+                    scopes = req.get("scopes", [])
+                    if auth_type == "bearer":
+                        if "bearerAuth" not in self._security_manager._schemes:
+                            from .security.http import HTTPBearer
+                            self.add_security_scheme("bearerAuth", HTTPBearer(scopes=scopes))
+                        elif scopes:
+                            # D9 fix: merge new scopes into the existing shared bearerAuth
+                            # scheme so the OpenMCP spec advertises the union of all scopes.
+                            # Without this, the first tool's scopes silently win and later
+                            # tools' extra scopes are invisible in components.securitySchemes.
+                            existing = self._security_manager._schemes["bearerAuth"]
+                            if hasattr(existing, "scopes") and existing.scopes is not None:
+                                merged = list(dict.fromkeys(list(existing.scopes) + list(scopes)))
+                                existing.scopes = merged
+                    elif auth_type == "apikey":
+                        key_name = req.get("key_name", "X-API-Key")
+                        location = req.get("in", "header")
+                        scheme_name = f"apiKeyAuth_{location}_{key_name}"
+                        if scheme_name not in self._security_manager._schemes:
+                            from .security.api_key import APIKeyHeader, APIKeyQuery, APIKeyCookie
+                            if location == "header":
+                                self.add_security_scheme(scheme_name, APIKeyHeader(name=key_name))
+                            elif location == "query":
+                                self.add_security_scheme(scheme_name, APIKeyQuery(name=key_name))
+                            elif location == "cookie":
+                                self.add_security_scheme(scheme_name, APIKeyCookie(name=key_name))
             handler = self._wrap_with_security(handler, security_config)
 
         # 3. Middleware wrapping
@@ -715,18 +920,25 @@ class ProdMCP:
 
         security_mgr = self._security_manager
 
+        # D2 fix: pre-compute expensive values once at handler-build time, not
+        # inside the per-request async function.  inspect.signature() constructs a
+        # Signature object on every call; for functools.wraps-wrapped handlers the
+        # CPython cache may not apply, burning CPU on every request.
+        _has_dependencies = getattr(handler, "__has_dependencies__", False)
+        _has_sec_ctx_param = "__security_context__" in inspect.signature(handler).parameters
+
         @functools.wraps(handler)
         async def secured(**kwargs: Any) -> Any:
             context = kwargs.pop("__security_context__", {})
             security_mgr.check(context, security_config)
-            
-            if getattr(handler, "__has_dependencies__", False):
+
+            if _has_dependencies:
                 kwargs["__request_context__"] = context
-                
-            if "__security_context__" in inspect.signature(handler).parameters:
+
+            if _has_sec_ctx_param:
                 kwargs["__security_context__"] = context
-            
-            if asyncio.iscoroutinefunction(handler):
+
+            if inspect.iscoroutinefunction(handler):
                 return await handler(**kwargs)
             return handler(**kwargs)
 
@@ -777,25 +989,79 @@ class ProdMCP:
         """Start the server.
 
         Args:
-            host: Bind address (default "0.0.0.0").
-            port: Port number (default 8000).
-            transport: One of "unified" (default), "stdio", or "sse".
-                - "unified": Serves both REST API and MCP on one HTTP server.
-                  REST routes at /, MCP SSE at {mcp_path}/sse.
-                - "stdio": Pure MCP over stdin/stdout (legacy, local subprocess).
-                - "sse": Pure MCP SSE server (no REST routes).
-            **kwargs: Additional kwargs passed through.
+            host: Bind address (default ``"0.0.0.0"``).
+            port: Port number (default ``8000``).
+            transport: One of ``"unified"`` (default), ``"stdio"``, ``"sse"``,
+                ``"http"``, or ``"streamable-http"``.
+
+                - ``"unified"``: Serves both REST API and MCP on one HTTP server.
+                  REST routes at ``/``, MCP endpoint at ``{mcp_path}``.
+                - ``"stdio"``: Pure MCP over stdin/stdout (local subprocess mode).
+                - ``"sse"`` / ``"http"`` / ``"streamable-http"``: Pure FastMCP HTTP
+                  server (no REST routes).  ASGI middlewares registered via
+                  :meth:`add_asgi_middleware` (e.g. ``CORSMiddleware``) are
+                  forwarded to FastMCP's HTTP server so they apply to all MCP
+                  endpoints.
+            **kwargs: Additional keyword arguments forwarded to the underlying
+                transport. For the unified transport these are passed to
+                ``uvicorn.run()`` (e.g. ``log_level``, ``reload``, ``workers``).
+                For stdio/sse/http transports these are forwarded to FastMCP's
+                runner. Note: ``uvicorn_config`` is NOT a valid kwarg — pass
+                uvicorn options directly (``log_level="debug"``, etc.).
         """
         self._finalize_pending()
 
         if transport == "stdio":
             self.mcp.run(transport="stdio", **kwargs)
-        elif transport == "sse":
-            self.mcp.run(transport="sse", host=host, port=port, **kwargs)
+
+        elif transport in {"sse", "http", "streamable-http"}:
+            # ── Inject ASGI middlewares into FastMCP's HTTP server ────────
+            # FastMCP's run_http_async() natively accepts a `middleware`
+            # parameter (list of starlette.middleware.Middleware).  Using this
+            # path instead of self.mcp.run() lets us inject CORSMiddleware and
+            # friends so they cover all MCP HTTP endpoints (/sse, /messages…).
+            try:
+                from starlette.middleware import Middleware as StarletteMiddleware
+            except ImportError:
+                logger.warning(
+                    "starlette not installed; ASGI middlewares cannot be applied "
+                    "to the %r FastMCP transport.  Install with "
+                    "`pip install prodmcp[rest]`.",
+                    transport,
+                )
+                self.mcp.run(transport=transport, host=host, port=port, **kwargs)
+                return
+
+            # Convert ProdMCP ASGIMiddlewareConfig → starlette Middleware objects
+            fastmcp_middlewares = [
+                StarletteMiddleware(mw_cfg.cls, **mw_cfg.kwargs)
+                for mw_cfg in self._middleware_manager.asgi_middlewares
+            ]
+            if fastmcp_middlewares:
+                logger.debug(
+                    "Forwarding %d ASGI middleware(s) to FastMCP %r transport",
+                    len(fastmcp_middlewares),
+                    transport,
+                )
+
+            import anyio
+            from functools import partial
+
+            anyio.run(
+                partial(
+                    self.mcp.run_http_async,
+                    transport=transport,
+                    host=host,
+                    port=port,
+                    middleware=fastmcp_middlewares or None,
+                    **kwargs,
+                )
+            )
+
         else:
             # Unified mode: REST + MCP on same server
             from .router import create_unified_app
-            app = create_unified_app(self)
+            unified = create_unified_app(self)
             try:
                 import uvicorn
             except ImportError:
@@ -803,7 +1069,7 @@ class ProdMCP:
                     "uvicorn is required for the unified server. "
                     "Install it with `pip install prodmcp[rest]`."
                 )
-            uvicorn.run(app, host=host, port=port, **kwargs)
+            uvicorn.run(unified, host=host, port=port, **kwargs)
 
     # ── Introspection ──────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prodmcp"
-version = "0.3.3"
+version = "0.3.4"
 description = "Unified production framework for both REST APIs and MCP servers. Drop-in replacement for FastAPI and FastMCP with schema validation, security, middleware, and OpenMCP spec generation."
 readme = "README.md"
 license = "MIT"
@@ -34,6 +34,8 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "anyio>=4.0",   # E7 fix: required by pytest-asyncio auto mode; was only available
+                   # transitively through fastmcp. Declared explicitly for bare [dev] installs.
 ]
 rest = [
     "fastapi>=0.109.1",

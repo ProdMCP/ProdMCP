@@ -84,9 +84,14 @@ class TestPublicImports:
 
 
 class TestVersion:
-    def test_version_is_030(self):
+    def test_version_is_semver_string(self):
+        """Version should be a non-empty semver string (dynamic from package metadata)."""
         from prodmcp import __version__
-        assert __version__ == "0.3.0"
+        assert isinstance(__version__, str)
+        assert len(__version__) > 0
+        # Basic semver format: at least MAJOR.MINOR.PATCH
+        parts = __version__.split(".")
+        assert len(parts) >= 3, f"Expected semver format, got {__version__!r}"
 
     def test_version_is_string(self):
         from prodmcp import __version__

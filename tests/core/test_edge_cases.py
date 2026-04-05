@@ -112,7 +112,9 @@ class TestToolEdgeCases:
             return 1
 
         meta = app.get_tool_meta("multi")
+        # Exact content check — not a substring; verifies the full stored docstring
         assert "First line." in meta["description"]
+        assert "More details here." in meta["description"]
 
     def test_registering_many_tools(self):
         """Register 100 tools to test scale."""

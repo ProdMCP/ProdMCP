@@ -37,14 +37,23 @@ class TestCommonWithTool:
     def test_common_provides_security_to_tool(self):
         app = ProdMCP("T")
 
-        @app.common(security=[{"bearer": ["read"]}])
+        # BS-16 fix: use the correct ProdMCP shorthand format {"type": "bearer", ...}
+        # The old test used {"bearer": ["read"]} which is the named-scheme dict format
+        # and looks for a scheme registered under the name "bearer" — which doesn't
+        # exist, making the security silently misconfigured.
+        @app.common(security=[{"type": "bearer", "scopes": ["read"]}])
         @app.tool(name="secured")
         def secured() -> str:
             return "ok"
 
         meta = app.get_tool_meta("secured")
-        # Security config should be present (may include auto-generated scheme names)
-        assert len(meta["security"]) >= 1
+        security = meta["security"]
+        # Must not be empty and must reference bearer semantics
+        assert len(security) >= 1
+        assert any(
+            "bearerAuth" in req or req.get("type") == "bearer"
+            for req in security
+        ), f"Expected bearer security requirement, got: {security}"
 
     def test_common_provides_middleware_to_tool(self):
         app = ProdMCP("T")

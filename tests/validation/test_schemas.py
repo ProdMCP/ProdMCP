@@ -40,7 +40,15 @@ class TestResolveSchema:
 
     def test_dict_passthrough(self):
         raw = {"type": "object", "properties": {"x": {"type": "string"}}}
-        assert resolve_schema(raw) is raw
+        result = resolve_schema(raw)
+        # P2-11 fix: resolve_schema(dict) returns a deep copy, NOT the same object.
+        # The old `assert result is raw` encoded the bug — mutating the result
+        # would corrupt the stored schema. Correct contract: equal content, new object.
+        assert result == raw, "resolve_schema(dict) must return equal content"
+        assert result is not raw, (
+            "resolve_schema(dict) must return a copy, not the same dict reference"
+        )
+
 
     def test_invalid_type_raises(self):
         with pytest.raises(TypeError):

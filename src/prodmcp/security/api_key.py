@@ -20,8 +20,13 @@ class APIKeyHeader(SecurityScheme):
         self.name = name
 
     def extract(self, context: dict[str, Any]) -> SecurityContext:
+        # N2 fix: HTTP headers are case-insensitive (RFC 7230).
+        # Normalize all header keys to lowercase before lookup so that both
+        # "X-API-Key" and "x-api-key" are found regardless of how the HTTP
+        # framework presents them.
         headers: dict[str, str] = context.get("headers", {})
-        api_key = headers.get(self.name, headers.get(self.name.lower(), ""))
+        lowered = {k.lower(): v for k, v in headers.items()}
+        api_key = lowered.get(self.name.lower(), "")
 
         if not api_key:
             raise ProdMCPSecurityError(
@@ -48,11 +53,18 @@ class APIKeyQuery(SecurityScheme):
 
     def extract(self, context: dict[str, Any]) -> SecurityContext:
         params: dict[str, str] = context.get("query_params", {})
-        api_key = params.get(self.name, "")
-
+        # C11 fix: use .get(name) returning None (not "") so we can distinguish
+        # "key absent" from "key present but empty". Both are rejected, but give
+        # different error messages to aid debugging.
+        api_key = params.get(self.name)
+        if api_key is None:
+            raise ProdMCPSecurityError(
+                f"Missing API key in query parameter: {self.name}",
+                scheme="apiKey",
+            )
         if not api_key:
             raise ProdMCPSecurityError(
-                f"Missing API key in query: {self.name}",
+                f"Empty API key in query parameter: {self.name}",
                 scheme="apiKey",
             )
         return SecurityContext(token=api_key, metadata={"key_name": self.name})
@@ -75,11 +87,16 @@ class APIKeyCookie(SecurityScheme):
 
     def extract(self, context: dict[str, Any]) -> SecurityContext:
         cookies: dict[str, str] = context.get("cookies", {})
-        api_key = cookies.get(self.name, "")
-
-        if not api_key:
+        # C11 fix: same as APIKeyQuery — distinguish absent vs empty cookie.
+        api_key = cookies.get(self.name)
+        if api_key is None:
             raise ProdMCPSecurityError(
                 f"Missing API key in cookie: {self.name}",
+                scheme="apiKey",
+            )
+        if not api_key:
+            raise ProdMCPSecurityError(
+                f"Empty API key in cookie: {self.name}",
                 scheme="apiKey",
             )
         return SecurityContext(token=api_key, metadata={"key_name": self.name})

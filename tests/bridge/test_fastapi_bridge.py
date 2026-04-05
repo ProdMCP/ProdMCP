@@ -189,3 +189,72 @@ async def test_fastapi_security_and_validation():
     assert resp.status_code == 200
     assert resp.json() == "Nothing"
 
+
+@pytest.mark.skipif(not HAS_FASTAPI, reason="FastAPI is not installed")
+async def test_asgi_middleware_in_as_fastapi():
+    """Bug 2 regression: ASGI middleware registered via add_asgi_middleware() must
+    be applied by create_fastapi_app() (as_fastapi()), not only by create_unified_app().
+    """
+    from unittest.mock import MagicMock
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.testclient import TestClient
+
+    app = ProdMCP("MiddlewareTest")
+    app._mcp = MagicMock()
+
+    app.add_asgi_middleware(
+        CORSMiddleware,
+        allow_origins=["https://test.example"],
+        allow_methods=["GET", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
+    @app.tool(name="ping")
+    def ping() -> str:
+        return "pong"
+
+    fastapi_app = app.as_fastapi()
+    client = TestClient(fastapi_app)
+
+    # Simple cross-origin request should carry CORS header
+    resp = client.post(
+        "/tools/ping",
+        json={},
+        headers={"Origin": "https://test.example"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "https://test.example"
+
+
+@pytest.mark.skipif(not HAS_FASTAPI, reason="FastAPI is not installed")
+async def test_exception_handler_in_as_fastapi():
+    """Bug 6 regression: exception handlers registered via add_exception_handler()
+    must survive create_fastapi_app() (as_fastapi() path).
+    """
+    from unittest.mock import MagicMock
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    from fastapi.testclient import TestClient
+
+    app = ProdMCP("ExcHandlerTest")
+    app._mcp = MagicMock()
+
+    async def value_error_handler(request: Request, exc: ValueError):
+        return JSONResponse(status_code=400, content={"detail": "caught: " + str(exc)})
+
+    app.add_exception_handler(ValueError, value_error_handler)
+
+    @app.tool(name="raise_tool")
+    def raise_tool() -> str:
+        raise ValueError("test value error")
+
+    fastapi_app = app.as_fastapi()
+    client = TestClient(fastapi_app, raise_server_exceptions=False)
+    resp = client.post("/tools/raise_tool", json={})
+    # P2-10 fix: _execute_wrapped no longer swallows non-ProdMCP exceptions.
+    # ValueError now propagates to FastAPI's handler chain → custom handler fires.
+    assert resp.status_code == 400, (
+        f"Expected 400 from custom ValueError handler, got {resp.status_code}. "
+        "Check that _execute_wrapped doesn't catch non-ProdMCP exceptions."
+    )
+    assert resp.json()["detail"] == "caught: test value error"

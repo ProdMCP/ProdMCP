@@ -108,7 +108,10 @@ class TestMCPBridgeHTTPCalls:
         client = self._client()
         resp = client.post("/prompts/summarize", json={"text": "hello world"})
         assert resp.status_code == 200
-        assert "Summary:" in resp.json()
+        # P2-7 fix: assert exact content, not just a substring prefix.
+        # "Summary:" in resp.json() would pass for any string starting with
+        # "Summary:" — even a wrong result like "Summary: WRONG".
+        assert resp.json() == "Summary: hello world"
 
     def test_tool_with_defaults(self):
         client = self._client()
@@ -131,8 +134,12 @@ class TestMCPBridgeBackwardCompat:
 
         fa1 = app.test_mcp_as_fastapi()
         fa2 = app.as_fastapi()
-        # Both should be FastAPI instances
-        assert type(fa1).__name__ == type(fa2).__name__
+        # P2-9 fix: use isinstance instead of type(x).__name__ comparison.
+        # Comparing class name strings passes even if the actual class differs
+        # (e.g. a Starlette subclass named "FastAPI" would fool the old check).
+        from fastapi import FastAPI as _FastAPI
+        assert isinstance(fa1, _FastAPI)
+        assert isinstance(fa2, _FastAPI)
 
     def test_bridge_app_has_title(self):
         from unittest.mock import MagicMock

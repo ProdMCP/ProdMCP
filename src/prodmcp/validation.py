@@ -5,7 +5,7 @@ Wraps handler functions with input/output validation.
 
 from __future__ import annotations
 
-import asyncio
+import inspect
 import logging
 from functools import wraps
 from typing import Any, Callable, Type
@@ -37,13 +37,17 @@ def create_validated_handler(
     Returns:
         A wrapped function that validates inputs and outputs.
     """
-    is_async = asyncio.iscoroutinefunction(fn)
+    is_async = inspect.iscoroutinefunction(fn)
 
     if is_async:
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             # Validate input
-            if input_schema and kwargs:
+            # Bug F fix: guard on schema presence only, not kwargs truthiness.
+            # The old `if input_schema and kwargs:` skipped validation when
+            # kwargs={} (e.g. all-default-param handlers), missing required-field
+            # checks and type constraints on optional fields.
+            if input_schema is not None:
                 validated_kwargs = _validate_input(kwargs, input_schema)
                 kwargs = {**kwargs, **validated_kwargs}
 
@@ -51,7 +55,9 @@ def create_validated_handler(
             result = await fn(*args, **kwargs)
 
             # Validate output
-            if output_schema:
+            # E5 fix: use `is not None` not truthiness — matches the Bug-F fix on
+            # input_schema above. A falsy schema like {} was previously silently skipped.
+            if output_schema is not None:
                 result = _validate_output(result, output_schema, strict)
             return result
 
@@ -60,7 +66,8 @@ def create_validated_handler(
         @wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             # Validate input
-            if input_schema and kwargs:
+            # Bug F fix: same as async path — guard on schema only.
+            if input_schema is not None:
                 validated_kwargs = _validate_input(kwargs, input_schema)
                 kwargs = {**kwargs, **validated_kwargs}
 
@@ -68,7 +75,7 @@ def create_validated_handler(
             result = fn(*args, **kwargs)
 
             # Validate output
-            if output_schema:
+            if output_schema is not None:
                 result = _validate_output(result, output_schema, strict)
             return result
 
@@ -87,7 +94,20 @@ def _validate_input(
         validated = validate_data(kwargs, schema, direction="input")
         if isinstance(validated, dict):
             return validated
-        return kwargs
+        # B6 fix: handle case where validate_data returns a BaseModel instance.
+        # The dead-code `return kwargs` fallback would silently bypass validation
+        # entirely — instead surface the result correctly or raise.
+        if isinstance(validated, BaseModel):
+            return validated.model_dump()
+        raise ProdMCPValidationError(
+            f"Input validation returned unexpected type {type(validated).__name__}; "
+            "expected a dict. This is likely a validation engine bug.",
+            errors=[{
+                "loc": [],
+                "msg": f"Validator returned {type(validated).__name__} instead of dict",
+                "type": "validation_error",
+            }],
+        )
     except ProdMCPValidationError:
         raise
     except Exception as exc:

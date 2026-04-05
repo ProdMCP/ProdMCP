@@ -28,7 +28,9 @@ class OpenIdConnect(SecurityScheme):
                 "Missing or invalid OpenID Connect Bearer token", scheme="openIdConnect"
             )
 
-        token = auth_header[7:]
+        # C4 fix: use len(prefix) instead of hardcoded 7 — consistent with B9 fixes
+        # in http.py and oauth2.py. "Bearer " is 7 chars but the literal integer is fragile.
+        token = auth_header[len("Bearer "):]
         return SecurityContext(token=token)
 
     def to_spec(self) -> dict[str, Any]:

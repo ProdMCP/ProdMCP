@@ -13,12 +13,41 @@ logger = logging.getLogger(__name__)
 
 
 class HTTPBearer(SecurityScheme):
-    """Bearer token authentication."""
+    """Bearer token authentication.
+
+    Args:
+        scopes: Required scopes for this scheme (declared, not enforced without
+            ``scope_validator``).
+        scope_validator: Optional callable ``(token: str) -> list[str]`` that
+            inspects the raw token (e.g. decodes a JWT) and returns the scopes
+            actually granted by it.  **Without this, scope enforcement is
+            disabled** — only token presence is checked.  A ``UserWarning`` is
+            emitted at request time when scopes are declared but no validator
+            is provided.
+    """
 
     scheme_type = "http"
 
-    def __init__(self, scopes: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        scopes: list[str] | None = None,
+        scope_validator: Any | None = None,
+    ) -> None:
         self.scopes = scopes or []
+        # callable(token: str) -> list[str] of actually-granted scopes
+        self.scope_validator = scope_validator
+        # Bug P3-3 fix: emit the warning once at construction time, not once
+        # per request inside extract() — which would spam logs on every call.
+        if self.scopes and scope_validator is None:
+            import warnings
+            warnings.warn(
+                f"HTTPBearer has required scopes {self.scopes!r} but no "
+                "scope_validator is configured — scope enforcement is DISABLED. "
+                "Provide a scope_validator callable (e.g. a JWT decoder) to "
+                "verify that the token actually grants these scopes.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     def extract(self, context: dict[str, Any]) -> SecurityContext:
         headers: dict[str, str] = context.get("headers", {})
@@ -29,8 +58,18 @@ class HTTPBearer(SecurityScheme):
                 "Missing or invalid Bearer token", scheme="bearerAuth"
             )
         
-        token = auth_header[7:]
-        return SecurityContext(token=token, scopes=self.scopes)
+        # B9 fix: use len(prefix) instead of hardcoded 7 — change-safe.
+        token = auth_header[len("Bearer "):]
+
+        if self.scope_validator is not None:
+            actual_scopes = self.scope_validator(token)
+        elif self.scopes:
+            # Warning already emitted in __init__; no per-request noise.
+            actual_scopes = list(self.scopes)
+        else:
+            actual_scopes = []
+
+        return SecurityContext(token=token, scopes=actual_scopes)
 
     def to_spec(self) -> dict[str, Any]:
         return {
@@ -63,9 +102,12 @@ class HTTPBasicAuth(SecurityScheme):
                 "Invalid Basic authentication credentials", scheme="basicAuth"
             ) from e
 
+        # N1 fix: do NOT store the plaintext password in metadata.
+        # If SecurityContext is ever logged (e.g. by LoggingMiddleware), the
+        # password would be leaked into log files.
         return SecurityContext(
-            token=password, 
-            metadata={"username": username, "password": password}
+            token=password,
+            metadata={"username": username},
         )
 
     def to_spec(self) -> dict[str, Any]:
@@ -89,7 +131,8 @@ class HTTPDigestAuth(SecurityScheme):
                 "Missing or invalid Digest HTTP header", scheme="digestAuth"
             )
 
-        token = auth_header[7:]
+        # B9 fix: use len(prefix) instead of hardcoded 7 — change-safe.
+        token = auth_header[len("Digest "):]
         return SecurityContext(token=token)
 
     def to_spec(self) -> dict[str, Any]:
