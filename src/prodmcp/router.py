@@ -60,13 +60,43 @@ def create_unified_app(app: "ProdMCP") -> Any:
     # @app.tool / @app.prompt / @app.resource decorators are processed.
     app._finalize_pending()
 
-    # ── Build the FastAPI sub-app for REST routes ──────────────────────
+    # ── Step 1: Build mcp_asgi first to extract its lifespan ──────────
+    # Bug 9 fix: FastMCP's StreamableHTTPSessionManager requires its
+    # lifespan context manager to be wired into the *parent* FastAPI app
+    # so the anyio task group initializes during application startup.
+    # If FastAPI is constructed before mcp_asgi (and therefore without
+    # lifespan=), the session manager task group is never started and
+    # every MCP request raises:
+    #   RuntimeError: Task group is not initialized. Make sure to use run()
+    # The fix: build mcp_asgi first, extract its lifespan, then pass it
+    # to FastAPI(lifespan=...) so uvicorn runs the startup hook.
+    # See: https://gofastmcp.com/deployment/asgi
+    mcp_asgi: Any = None
+    try:
+        mcp_instance = app.mcp
+        if hasattr(mcp_instance, "sse_app"):
+            mcp_asgi = mcp_instance.sse_app()
+        elif hasattr(mcp_instance, "http_app"):
+            mcp_asgi = mcp_instance.http_app()
+        else:
+            logger.warning(
+                "FastMCP instance does not expose sse_app() or http_app(). "
+                "MCP endpoint will not be available."
+            )
+    except Exception as e:  # pragma: no cover
+        logger.warning("Failed to build MCP ASGI app: %s", e)
 
+    mcp_lifespan = getattr(mcp_asgi, "lifespan", None) if mcp_asgi else None
+
+    # ── Step 2: Build the FastAPI sub-app for REST routes ─────────────
     fastapi_app = FastAPI(
         title=app.name,
         version=app.version,
         description=app.description,
+        lifespan=mcp_lifespan,  # None is a no-op; set when mcp_asgi has a lifespan
     )
+    if mcp_lifespan:
+        logger.debug("FastAPI app created with FastMCP lifespan context manager")
 
     # ── Apply ASGI-level middlewares (e.g. CORSMiddleware) ─────────────
     # These are registered via app.add_asgi_middleware() and must be
@@ -90,33 +120,15 @@ def create_unified_app(app: "ProdMCP") -> Any:
     for key, meta in app._registry.get("api", {}).items():
         _add_api_route(fastapi_app, app, meta)
 
-    # ── Mount the MCP SSE app ─────────────────────────────────────────
 
-    try:
-        # FastMCP exposes an ASGI-compatible app via .sse_app() or similar
-        mcp_instance = app.mcp
-        if hasattr(mcp_instance, "sse_app"):
-            mcp_asgi = mcp_instance.sse_app()
-        elif hasattr(mcp_instance, "http_app"):
-            mcp_asgi = mcp_instance.http_app()
-        else:
-            # Fallback: try to get the streamable-http ASGI app
-            mcp_asgi = None
-            logger.warning(
-                "FastMCP instance does not expose sse_app() or http_app(). "
-                "MCP endpoint will not be available."
-            )
-
-        if mcp_asgi:
-            # ── Wrap the MCP sub-app with ASGI middlewares ────────────────
-            # IMPORTANT: Starlette's mount() creates an isolated ASGI scope.
-            # Middleware applied to the parent FastAPI app does NOT reach the
-            # mounted sub-app.  We therefore manually wrap mcp_asgi with the
-            # same middleware stack so that CORSMiddleware (and others) also
-            # intercept requests to /mcp/sse, /mcp/messages, etc.
-            #
-            # Middlewares must be applied in *reverse* registration order so
-            # the first-registered ends up as the outermost layer.
+    # ── Step 5: Mount the MCP sub-app ─────────────────────────────────
+    # mcp_asgi was already built in Step 1 (before FastAPI) to extract its
+    # lifespan. Here we just wrap it with ASGI middlewares and mount it.
+    # Starlette's mount() creates an isolated ASGI scope, so CORSMiddleware
+    # applied to fastapi_app does NOT reach the mounted sub-app. We manually
+    # wrap mcp_asgi with the same middleware stack.
+    if mcp_asgi:
+        try:
             asgi_mws = app._middleware_manager.asgi_middlewares
             if asgi_mws:
                 for mw_cfg in reversed(asgi_mws):
@@ -134,11 +146,12 @@ def create_unified_app(app: "ProdMCP") -> Any:
                         )
 
             fastapi_app.mount(app.mcp_path, mcp_asgi)
-            logger.info("MCP SSE mounted at %s", app.mcp_path)
-    except Exception as e:
-        logger.warning("Failed to mount MCP SSE app: %s", e)
+            logger.info("MCP mounted at %s", app.mcp_path)
+        except Exception as e:
+            logger.warning("Failed to mount MCP sub-app: %s", e)
 
     return fastapi_app
+
 
 
 def _add_api_route(

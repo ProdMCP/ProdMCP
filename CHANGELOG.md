@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [0.3.9] — 2026-04-06
+
+### 🐛 Critical Runtime Fix (Bug 9)
+
+#### Fixed
+
+- **`router.py` — FastMCP lifespan regression** (`Bug 9`): `create_unified_app()` constructed `FastAPI()` before calling `mcp_instance.http_app()`, so `lifespan=` was always `None`. FastMCP's `StreamableHTTPSessionManager` task group never initialized on startup — every MCP request raised `RuntimeError: Task group is not initialized. Make sure to use run()`. This is a regression of the original Bug 6 fix (applied in v0.3.4 as a site-package patch but never merged into the source). Fixed by building `mcp_asgi` first, extracting `mcp_asgi.lifespan`, and passing it to `FastAPI(lifespan=mcp_lifespan)`. The duplicate mcp_asgi construction block in the mount step is removed; the single `mcp_asgi` built in Step 1 is reused for both lifespan wiring and mounting.
+
+---
+
 ## [0.3.5] — 2026-04-06
 
 ### 🐛 Critical Security & DI Bug Fixes (Bugs 3, 4, 5)
