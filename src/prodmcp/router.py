@@ -178,7 +178,24 @@ def _add_api_route(
     middleware_config = meta.get("middleware") or common_cfg.get("middleware")
     input_schema = meta.get("input_schema") or common_cfg.get("input_schema")
 
-    if security_config or middleware_config or input_schema:
+    # Also trigger the ProdMCP handler wrapper when the function itself has
+    # prodmcp.Depends parameters even with no security/middleware/input_schema.
+    # Without this, FastAPI receives the raw `prodmcp.Depends(...)` object as a
+    # parameter default and (correctly for its own DI, wrongly for ours) treats
+    # the parameter as a query/body field, returning 422.
+    from .dependencies import Depends as _ProdDep
+    import inspect as _inspect
+    _has_prodmcp_depends = any(
+        isinstance(p.default, _ProdDep)
+        or (
+            p.default is not _inspect.Parameter.empty
+            and hasattr(p.default, "dependency")
+            and callable(getattr(p.default, "dependency", None))
+        )
+        for p in _inspect.signature(handler_fn).parameters.values()
+    )
+
+    if security_config or middleware_config or input_schema or _has_prodmcp_depends:
         # Build a ProdMCP-wrapped handler
         entity_name = operation_id or handler_fn.__name__
         wrapped = app._build_handler(

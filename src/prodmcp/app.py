@@ -822,7 +822,41 @@ class ProdMCP:
             else:
                 new_params.append(param)
 
-        stripped_sig = sig.replace(parameters=new_params)
+        stripped_sig = sig.replace(parameters=new_params)  # will be rebuilt below
+
+        # ── Resolve string annotations (from __future__ import annotations) ──────
+        # If the user's module has `from __future__ import annotations` (PEP 563),
+        # ALL annotations are stored as strings (e.g. 'ItemRequest', not the class).
+        # `inspect.signature` returns those strings verbatim, so downstream checks
+        # like `isinstance(ann, type) and issubclass(ann, BaseModel)` silently fail.
+        # `typing.get_type_hints(fn)` resolves the strings in fn.__globals__ — which
+        # contains the user's module namespace where the class is defined.
+        import typing as _typing
+        try:
+            _resolved_hints = _typing.get_type_hints(fn)
+        except Exception:
+            _resolved_hints = {}
+
+        # Rebuild sig parameters with resolved annotations.
+        _resolved_params = []
+        for _p in sig.parameters.values():
+            _resolved_ann = _resolved_hints.get(_p.name, _p.annotation)
+            if _resolved_ann != _p.annotation:
+                _p = _p.replace(annotation=_resolved_ann)
+            _resolved_params.append(_p)
+        sig = sig.replace(parameters=_resolved_params)
+
+        # Re-strip with resolved annotations so stripped_sig also has real types.
+        new_params_resolved = []
+        for _p in sig.parameters.values():
+            _is_dep = isinstance(_p.default, Depends) or (
+                _p.default is not inspect.Parameter.empty
+                and hasattr(_p.default, "dependency")
+                and callable(getattr(_p.default, "dependency", None))
+            )
+            if not _is_dep:
+                new_params_resolved.append(_p)
+        stripped_sig = sig.replace(parameters=new_params_resolved)
 
         if has_dependencies:
             # Pre-compute the annotation map for Bug 8 coercion (done once at registration).
@@ -864,6 +898,12 @@ class ProdMCP:
                 return fn(*args, **kwargs)
 
             dep_wrapper.__signature__ = stripped_sig
+            # ── Clear __wrapped__ (set by functools.wraps) ──────────────────────
+            # FastAPI follows __wrapped__ via get_typed_signature → typing.get_type_hints
+            # and sees the *original* fn signature (with Depends params). FastAPI then
+            # treats those params as query/body parameters → 422. We own the __signature__;
+            # removing __wrapped__ prevents FastAPI from looking past it.
+            dep_wrapper.__wrapped__ = None  # type: ignore[attr-defined]
             handler = dep_wrapper
         else:
             # B1 fix: do NOT assign stripped_sig to fn.__signature__ directly.
@@ -918,6 +958,7 @@ class ProdMCP:
 
             _sig_wrapper = _make_coercion_wrapper(fn, _annotation_map_nd)
             _sig_wrapper.__signature__ = stripped_sig
+            _sig_wrapper.__wrapped__ = None  # type: ignore[attr-defined]
             handler = _sig_wrapper
 
         # 1. Validation wrapping

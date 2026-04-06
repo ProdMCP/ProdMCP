@@ -53,6 +53,22 @@ except ImportError:
     GZipMiddleware = None   # type: ignore[assignment,misc]
     TrustedHostMiddleware = None  # type: ignore[assignment,misc]
 
+# Re-export testing and response utilities so that test code and handlers
+# need zero fastapi/starlette imports.
+try:
+    from starlette.testclient import TestClient
+except ImportError:
+    TestClient = None  # type: ignore[assignment,misc]
+
+try:
+    from fastapi.responses import JSONResponse, Response
+except ImportError:
+    try:
+        from starlette.responses import JSONResponse, Response  # type: ignore[assignment]
+    except ImportError:
+        JSONResponse = None  # type: ignore[assignment,misc]
+        Response = None  # type: ignore[assignment,misc]
+
 
 # D7 fix: derive version from the installed package metadata so __version__
 # stays in sync with pyproject.toml automatically after each release bump.
@@ -61,7 +77,7 @@ try:
     from importlib.metadata import version as _pkg_version
     __version__: str = _pkg_version("prodmcp")
 except Exception:  # PackageNotFoundError or any import error
-    __version__ = "0.3.7"
+    __version__ = "0.3.8"
 
 __all__ = [
     # Core
@@ -81,6 +97,10 @@ __all__ = [
     "CORSMiddleware",
     "GZipMiddleware",
     "TrustedHostMiddleware",
+    # Testing & HTTP utilities (no fastapi/starlette import needed)
+    "TestClient",
+    "JSONResponse",
+    "Response",
     # Dependencies
     "Depends",
     # HTTP Compat
