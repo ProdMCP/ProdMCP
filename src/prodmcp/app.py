@@ -825,10 +825,36 @@ class ProdMCP:
         stripped_sig = sig.replace(parameters=new_params)
 
         if has_dependencies:
+            # Pre-compute the annotation map for Bug 8 coercion (done once at registration).
+            _annotation_map: dict[str, Any] = {
+                pname: pparam.annotation
+                for pname, pparam in sig.parameters.items()
+                if pparam.annotation is not inspect.Parameter.empty
+            }
+
             @functools.wraps(fn)
             async def dep_wrapper(*args: Any, **kwargs: Any) -> Any:
                 context = kwargs.pop("__request_context__", {})
                 kwargs.pop("__security_context__", None)
+
+                # Bug 8 fix: coerce dict body values to their annotated Pydantic model.
+                # router.py now passes the body as kwargs[param_name]=dict when it detects
+                # a BaseModel-annotated parameter.  Coerce here so fn always receives the
+                # correct type, regardless of whether input_schema was explicitly set.
+                from pydantic import BaseModel as _PydanticBM
+                for _kname, _kval in list(kwargs.items()):
+                    _ann = _annotation_map.get(_kname)
+                    if (
+                        isinstance(_kval, dict)
+                        and _ann is not None
+                        and isinstance(_ann, type)
+                        and issubclass(_ann, _PydanticBM)
+                        and not isinstance(_kval, _ann)
+                    ):
+                        try:
+                            kwargs[_kname] = _ann(**_kval)
+                        except Exception:
+                            pass  # leave as dict; validation layer will surface the error
 
                 resolved = await resolve_dependencies(fn, context, overrides=kwargs)
                 kwargs.update(resolved)
@@ -846,14 +872,51 @@ class ProdMCP:
             # the second call to _build_handler sees already-stripped params —
             # Depends() detection breaks and fn is permanently corrupted.
             # Use a thin wrapper that carries the stripped signature instead.
-            if inspect.iscoroutinefunction(fn):
-                @functools.wraps(fn)
-                async def _sig_wrapper(*args: Any, **kwargs: Any) -> Any:
-                    return await fn(*args, **kwargs)
-            else:
-                @functools.wraps(fn)
-                def _sig_wrapper(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
-                    return fn(*args, **kwargs)
+
+            # Pre-compute annotation map for Bug 8 coercion (same logic as dep_wrapper path).
+            _annotation_map_nd: dict[str, Any] = {
+                pname: pparam.annotation
+                for pname, pparam in sig.parameters.items()
+                if pparam.annotation is not inspect.Parameter.empty
+            }
+
+            def _make_coercion_wrapper(wrapped_fn: Any, ann_map: dict[str, Any]) -> Any:
+                """Return a thin wrapper that coerces dict body kwargs to BaseModel."""
+                from pydantic import BaseModel as _PydanticBM
+
+                if inspect.iscoroutinefunction(wrapped_fn):
+                    @functools.wraps(wrapped_fn)
+                    async def _sig_wrapper(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
+                        for _kn, _kv in list(kwargs.items()):
+                            _an = ann_map.get(_kn)
+                            if (
+                                isinstance(_kv, dict) and _an is not None
+                                and isinstance(_an, type) and issubclass(_an, _PydanticBM)
+                                and not isinstance(_kv, _an)
+                            ):
+                                try:
+                                    kwargs[_kn] = _an(**_kv)
+                                except Exception:
+                                    pass
+                        return await wrapped_fn(*args, **kwargs)
+                else:
+                    @functools.wraps(wrapped_fn)
+                    def _sig_wrapper(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
+                        for _kn, _kv in list(kwargs.items()):
+                            _an = ann_map.get(_kn)
+                            if (
+                                isinstance(_kv, dict) and _an is not None
+                                and isinstance(_an, type) and issubclass(_an, _PydanticBM)
+                                and not isinstance(_kv, _an)
+                            ):
+                                try:
+                                    kwargs[_kn] = _an(**_kv)
+                                except Exception:
+                                    pass
+                        return wrapped_fn(*args, **kwargs)
+                return _sig_wrapper
+
+            _sig_wrapper = _make_coercion_wrapper(fn, _annotation_map_nd)
             _sig_wrapper.__signature__ = stripped_sig
             handler = _sig_wrapper
 

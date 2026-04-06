@@ -11,6 +11,20 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any
 
+# Bug 8 fix: Request and HTTPException must be module-level imports.
+# `from __future__ import annotations` turns all annotations into strings.
+# `_api_handler_secured(request: Request)` stores 'Request' as a string.
+# FastAPI calls get_type_hints(_api_handler_secured) which looks up 'Request'
+# in _api_handler_secured.__globals__ (the module namespace). If Request is
+# only imported locally inside _add_api_route, it is NOT in __globals__, so
+# get_type_hints() fails to resolve the type and FastAPI treats `request` as
+# an unresolved parameter → query parameter → 422 on every request.
+try:
+    from fastapi import HTTPException, Request  # noqa: E402
+except ImportError:  # [rest] not installed
+    HTTPException = None  # type: ignore[assignment,misc]
+    Request = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -133,7 +147,8 @@ def _add_api_route(
     meta: dict[str, Any],
 ) -> None:
     """Add a single API route to the FastAPI application."""
-    from fastapi import Request, HTTPException
+    # Request and HTTPException are imported at module level (Bug 8 fix).
+    # ProdMCPSecurityError/ProdMCPValidationError are local to avoid circular imports.
     from .exceptions import ProdMCPSecurityError, ProdMCPValidationError
 
     handler_fn = meta["handler"]
@@ -210,12 +225,60 @@ def _add_api_route(
                     ),
                 )
 
-            # C6 fix: path parameters MUST win over body keys.
-            # The previous order ({**request.path_params, **body}) let body keys
-            # silently overwrite URL path parameters — a client could inject
-            # arbitrary values for path params like 'item_id' via the JSON body,
-            # bypassing route-level access control that depends on path params.
-            kwargs = {**body, **request.path_params}  # path params take precedence
+            # Bug 8 fix: detect Pydantic body parameters in the wrapped handler's
+            # signature and pass the body as a model INSTANCE keyed to the correct
+            # parameter name, instead of always doing {**body} (flat key expansion).
+            #
+            # Problem: a handler like `chat(request: ChatRequest)` expects
+            #   wrapped(request=ChatRequest(message="hello"))
+            # but the old code called:
+            #   wrapped(message="hello")  ← wrong param name → TypeError / 422
+            #
+            # This also fixes the reserved-name collision: the outer closure uses
+            # `request` for the FastAPI Request object; a user param also named
+            # `request` would overwrite it in the flat expansion.
+            #
+            # Algorithm:
+            #   For each parameter in the inner handler's stripped signature (excluding
+            #   meta injections and path params), if its annotation is a Pydantic
+            #   BaseModel subclass, fold the entire body dict into one model instance
+            #   keyed by that param name.  Otherwise keep the flat-expansion behaviour
+            #   so simple scalar/dict handlers continue to work unchanged.
+            try:
+                from pydantic import BaseModel as _BaseModel
+                _inner_sig = inspect.signature(wrapped)
+                _body_key: str | None = None
+                _body_type: type | None = None
+                for _pname, _pparam in _inner_sig.parameters.items():
+                    if _pname.startswith("__"):  # skip meta injections
+                        continue
+                    if _pname in request.path_params:  # already in path
+                        continue
+                    _ann = _pparam.annotation
+                    if (
+                        _ann is not inspect.Parameter.empty
+                        and isinstance(_ann, type)
+                        and issubclass(_ann, _BaseModel)
+                    ):
+                        _body_key = _pname
+                        _body_type = _ann
+                        break  # single body model expected
+            except Exception:
+                _body_key = None
+                _body_type = None
+
+            if _body_key is not None and _body_type is not None:
+                # Build kwargs with the body folded into one model-valued param.
+                # Path params are separate (they were already parsed by FastAPI/Starlette).
+                kwargs = dict(request.path_params)   # path params win
+                kwargs[_body_key] = body             # body dict; validation layer handles it
+            else:
+                # C6 fix: path parameters MUST win over body keys.
+                # The previous order ({**request.path_params, **body}) let body keys
+                # silently overwrite URL path parameters — a client could inject
+                # arbitrary values for path params like 'item_id' via the JSON body,
+                # bypassing route-level access control that depends on path params.
+                kwargs = {**body, **request.path_params}  # path params take precedence
 
             # Bug D fix: only inject __security_context__ when security is
             # actually configured.  Injecting it unconditionally causes

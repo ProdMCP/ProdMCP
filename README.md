@@ -1,6 +1,6 @@
 # ProdMCP
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.3.6-blue)](https://pypi.org/project/prodmcp/0.3.6/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.3.7-blue)](https://pypi.org/project/prodmcp/0.3.7/)
 [![Python versions](https://img.shields.io/pypi/pyversions/prodmcp.svg)](https://pypi.org/project/prodmcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![FOSSA](https://img.shields.io/badge/FOSSA-license%20compliant-brightgreen)](https://app.fossa.com/projects/custom%2B61520%2Fprodmcp)

@@ -89,7 +89,43 @@ def _validate_input(
     """Validate input kwargs against a schema.
 
     Returns the validated data dict.
+
+    Bug 8 fix: router.py now passes Pydantic body params as a named kwarg:
+        kwargs = {"request": {"message": "hello"}}   # NOT {"message": "hello"}
+    When the schema is a BaseModel and kwargs has a single key whose value is a
+    plain dict, we first attempt validation against the *inner* dict.  If that
+    succeeds we re-nest the result under the original key so downstream callers
+    (dep_wrapper / _sig_wrapper) receive the correctly-keyed argument.
     """
+    from pydantic import BaseModel as _BaseModel  # avoid circular at module level
+
+    # Bug 8: detect the "named body param" layout and unwrap before validating.
+    _body_key: str | None = None
+    _body_data: dict[str, Any] | None = None
+    if (
+        isinstance(schema, type)
+        and issubclass(schema, _BaseModel)
+        and len(kwargs) == 1
+    ):
+        _only_key, _only_val = next(iter(kwargs.items()))
+        if isinstance(_only_val, dict):
+            # Heuristic: if the schema fields don't include _only_key but do
+            # include at least one key from _only_val, the body was wrapped.
+            schema_fields = set(schema.model_fields.keys())
+            if _only_key not in schema_fields and schema_fields & set(_only_val.keys()):
+                _body_key = _only_key
+                _body_data = _only_val
+
+    if _body_key is not None and _body_data is not None:
+        try:
+            validated = validate_data(_body_data, schema, direction="input")
+            if isinstance(validated, dict):
+                return {_body_key: schema(**_body_data)}  # return model instance keyed by param name
+            if isinstance(validated, _BaseModel):
+                return {_body_key: validated}
+        except Exception:
+            pass  # fall through to the standard path
+
     try:
         validated = validate_data(kwargs, schema, direction="input")
         if isinstance(validated, dict):
