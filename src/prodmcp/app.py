@@ -354,7 +354,7 @@ class ProdMCP:
         tool_desc = description or fn.__doc__ or ""
         is_strict = eff_strict_val if eff_strict_val is not None else self.strict_output
 
-        # Build the wrapped handler
+        # Build the core handler (validation + security + middleware)
         wrapped = self._build_handler(
             fn,
             entity_type="tool",
@@ -366,6 +366,74 @@ class ProdMCP:
             strict=is_strict,
         )
 
+        # Bug 10 fix: inject HTTP request headers into __security_context__ for MCP tool calls.
+        #
+        # The security problem:
+        # - For REST routes, router.py's _api_handler_secured builds __security_context__
+        #   from the FastAPI Request object and passes it to the handler as a kwarg.
+        # - For MCP tool calls (via streamable-HTTP MCP protocol), FastMCP invokes the
+        #   handler with only the tool's input arguments — __security_context__ is NEVER
+        #   injected, so _wrap_with_security → SecurityManager.check() → scheme.extract()
+        #   sees an empty context dict and raises ProdMCPSecurityError every time.
+        #
+        # Fix: if the tool has security config, wrap the handler with a FastMCP-Context-
+        # aware outer callable.  FastMCP automatically injects `ctx: fastmcp.Context` into
+        # any tool handler that declares it; ctx.request_context.request.headers carries
+        # the HTTP headers (including Authorization) from the MCP POST request.
+        # We extract those headers and inject them as __security_context__ so that the
+        # inner _wrap_with_security layer can authenticate the request normally.
+        mcp_handler = wrapped
+        if eff_security:
+            import functools
+
+            _inner = wrapped
+            _sec_cfg = eff_security
+
+            @functools.wraps(fn)
+            async def _mcp_secured_wrapper(*args: Any, ctx: Any = None, **kwargs: Any) -> Any:  # noqa: ANN401
+                """FastMCP-Context-aware security bridge.
+
+                Extracts HTTP request headers from the FastMCP Context and
+                builds __security_context__ for the inner secured handler.
+                """
+                sec_ctx: dict[str, Any] = {}
+                if ctx is not None:
+                    try:
+                        request = ctx.request_context.request
+                        sec_ctx = {
+                            "headers": dict(request.headers),
+                            "query_params": dict(request.query_params),
+                        }
+                    except Exception:
+                        pass  # If no HTTP context (e.g. stdio), leave empty
+
+                return await _inner(*args, __security_context__=sec_ctx, **kwargs)
+
+            # Preserve the stripped signature so FastMCP doesn't see __security_context__
+            # or ctx in the tool's JSON schema — only user-visible input params.
+            try:
+                import inspect as _inspect
+                from fastmcp import Context as _FMCPContext  # type: ignore[import-untyped]
+
+                # Add ctx parameter so FastMCP injects it automatically
+                _orig_sig = _inspect.signature(wrapped)
+                _ctx_param = _inspect.Parameter(
+                    "ctx",
+                    kind=_inspect.Parameter.KEYWORD_ONLY,
+                    default=None,
+                    annotation=_FMCPContext,
+                )
+                # Only append if not already there
+                _existing_params = list(_orig_sig.parameters.values())
+                if not any(p.name == "ctx" for p in _existing_params):
+                    _new_sig = _orig_sig.replace(parameters=_existing_params + [_ctx_param])
+                    _mcp_secured_wrapper.__signature__ = _new_sig  # type: ignore[attr-defined]
+            except Exception:
+                pass  # If FastMCP Context unavailable, fall through gracefully
+
+            _mcp_secured_wrapper.__security_config__ = getattr(wrapped, "__security_config__", _sec_cfg)  # type: ignore[attr-defined]
+            mcp_handler = _mcp_secured_wrapper
+
         # Store metadata.
         # B2 fix: store the pre-built `wrapped` handler so create_fastapi_app()
         # (_add_tool_route) can reuse it directly instead of calling _build_handler
@@ -376,19 +444,20 @@ class ProdMCP:
             "description": tool_desc.strip(),
             "input_schema": eff_input,
             "output_schema": eff_output,
-            "security": getattr(wrapped, "__security_config__", eff_security or []),
+            "security": getattr(mcp_handler, "__security_config__", eff_security or []),
             "middleware": eff_middleware or [],
             "tags": eff_tags,
             "handler": fn,
-            "wrapped": wrapped,   # B2: reused by _add_tool_route
+            "wrapped": wrapped,   # B2: REST bridge uses this (already has _api_handler_secured)
             "strict": is_strict,
         }
 
-        # Register with FastMCP
+        # Register with FastMCP using the MCP-secured wrapper
         self.mcp.tool(
             name=tool_name,
             description=tool_desc.strip(),
-        )(wrapped)
+        )(mcp_handler)
+
 
     def prompt(
         self,

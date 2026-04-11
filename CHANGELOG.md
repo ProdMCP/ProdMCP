@@ -6,7 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [0.3.10] — 2026-04-11
+
+### 🐛 Critical Security Fix (Bug 10)
+
+#### Fixed
+
+- **`app.py` — MCP tool security checks always fail** (`Bug 10`): When a `@app.tool` handler is decorated with `@app.common(security=[{"bearer": []}])` and called via the MCP protocol (streamable-HTTP), ProdMCP's `_wrap_with_security` → `SecurityManager.check()` → `HTTPBearer.extract()` received an empty `{}` context — no `Authorization` header — and raised `ProdMCPSecurityError: Missing or invalid Bearer token` on every call.
+
+  **Root cause**: For REST routes, `router.py`'s `_api_handler_secured` builds `__security_context__` from the FastAPI `Request` object and injects it as a kwarg before calling the handler. No equivalent injection existed for MCP tool calls; FastMCP invoked the wrapped handler with only the tool's input arguments.
+
+  **Fix**: In `_register_tool`, after `_build_handler`, if the tool has `eff_security`, wrap the FastMCP-registered handler with a `ctx: fastmcp.Context`-aware outer callable (`_mcp_secured_wrapper`). FastMCP automatically injects `Context` into any tool handler that declares it as a keyword argument. The wrapper extracts `ctx.request_context.request.headers` (the HTTP headers from the MCP POST) and injects them as `__security_context__` before delegating to the inner handler. The REST bridge continues to use the pre-built `wrapped` handler unchanged (which gets its own `__security_context__` from `_api_handler_secured`).
+
+---
+
 ## [0.3.9] — 2026-04-06
+
 
 ### 🐛 Critical Runtime Fix (Bug 9)
 
