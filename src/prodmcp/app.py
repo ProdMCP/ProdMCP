@@ -427,12 +427,38 @@ class ProdMCP:
                 _existing_params = list(_orig_sig.parameters.values())
                 if not any(p.name == "ctx" for p in _existing_params):
                     _new_sig = _orig_sig.replace(parameters=_existing_params + [_ctx_param])
-                    _mcp_secured_wrapper.__signature__ = _new_sig  # type: ignore[attr-defined]
+                else:
+                    _new_sig = _orig_sig
+
+                _mcp_secured_wrapper.__signature__ = _new_sig  # type: ignore[attr-defined]
+
+                # Bug: @functools.wraps(fn) copies fn.__annotations__ onto the wrapper.
+                # FastMCP's ParsedFunction uses typing.get_type_hints() / TypeAdapter which
+                # reads __annotations__ *independently* of __signature__. If the original fn
+                # had user-defined types (e.g. ctx: AzureADTokenContext with a non-Pydantic
+                # _auth: AzureADAuth field), Pydantic schema generation crashes with
+                # PydanticSchemaGenerationError: "arbitrary_types_allowed".
+                #
+                # Fix: reset __annotations__ to exactly what the new signature declares.
+                # This ensures TypeAdapter/get_type_hints only sees types FastMCP can handle
+                # (fastmcp.Context + the stripped tool params — none of the user dep types).
+                _mcp_secured_wrapper.__annotations__ = {  # type: ignore[attr-defined]
+                    p.name: p.annotation
+                    for p in _new_sig.parameters.values()
+                    if p.annotation is not _inspect.Parameter.empty
+                }
+
+                # Also sever the __wrapped__ chain: functools.wraps sets __wrapped__ = fn,
+                # and inspect.signature / Pydantic may follow it. Severing it forces both
+                # to use __signature__ and __annotations__ set above.
+                _mcp_secured_wrapper.__wrapped__ = None  # type: ignore[attr-defined]
+
             except Exception:
                 pass  # If FastMCP Context unavailable, fall through gracefully
 
             _mcp_secured_wrapper.__security_config__ = getattr(wrapped, "__security_config__", _sec_cfg)  # type: ignore[attr-defined]
             mcp_handler = _mcp_secured_wrapper
+
 
         # Store metadata.
         # B2 fix: store the pre-built `wrapped` handler so create_fastapi_app()
