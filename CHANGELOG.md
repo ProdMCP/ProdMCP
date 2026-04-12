@@ -6,6 +6,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [0.3.12] — 2026-04-12
+
+### 🐛 Bug Fix (Bug 11)
+
+#### Fixed
+
+- **`app.py` — `PydanticSchemaGenerationError` on startup with ADK + secured tools** (`Bug 11`): When a `@app.tool` handler used `Depends(auth.require_context)` returning an `AzureADTokenContext` (or any non-Pydantic type), `@functools.wraps(fn)` copied `fn.__annotations__` onto `_mcp_secured_wrapper`. FastMCP's `ParsedFunction.from_function` calls `TypeAdapter(wrapper_fn)` which reads `__annotations__` independently of `__signature__`, saw the user-space type (e.g. `AzureADTokenContext` with a `_auth: AzureADAuth` field), and raised `PydanticSchemaGenerationError: Unable to generate pydantic-core schema`.
+
+  **Fix**: After building `_new_sig`, reset `__annotations__` on `_mcp_secured_wrapper` to exactly what the new signature declares (only `fastmcp.Context` + stripped tool params). Also set `__wrapped__ = None` to sever the `functools.wraps` chain so `inspect.signature` / Pydantic cannot follow it back to the original function.
+
+---
+
+## [0.3.11] — 2026-04-12
+
+### ✨ Feature — Azure AD / Entra ID Integration (`prodmcp.integrations.azure`)
+
+#### Added
+
+- **`AzureADAuth`** — Plug-and-play Azure AD authentication class for ProdMCP.
+  - `AzureADAuth.from_env()` — reads `TENANT_ID`, `BACKEND_CLIENT_ID`, `BACKEND_CLIENT_SECRET`, `API_AUDIENCE`, `OBO_SCOPE` from environment.
+  - `AzureADAuth(tenant_id=..., client_id=..., client_secret=..., ...)` — explicit constructor.
+  - `auth.bearer_scheme` — a `ProdMCP`-compatible `SecurityScheme` (`AzureADBearerScheme`) that validates RS256 JWTs via JWKS with multi-format issuer/audience acceptance.
+  - `auth.require_context` — `Depends()` factory returning `AzureADTokenContext` for use in route and tool handlers.
+
+- **`AzureADTokenContext`** — Verified Azure AD identity attached to every authenticated request.
+  - `ctx.token` — raw JWT string.
+  - `ctx.claims` — decoded and verified JWT payload.
+  - `ctx.user_info` — `{ oid, tid, name, preferred_username, aud, scp, roles }`.
+  - `ctx.roles` — list of roles from the JWT.
+  - `ctx.has_role(role)` — boolean role check.
+  - `ctx.require_role(role)` — raises HTTP 403 if role is absent.
+  - `ctx.get_obo_token(scope=...)` — On-Behalf-Of token exchange, defaulting to `obo_scope`.
+
+- **`AzureADBearerScheme`** (`HTTPBearer` subclass) — validates tokens via `AzureADAuth._validate_token()` inside ProdMCP's `SecurityManager.check()` for both REST routes and MCP tool calls.
+
+- **Module-level JWKS + OpenID config caching** — 1-hour TTL per tenant, shared across all `AzureADAuth` instances.
+
+- **Informative OBO error hints** — `invalid_grant`, `invalid_scope`, `unauthorized_client`, `interaction_required` all produce actionable error descriptions.
+
+#### Example
+
+```python
+from prodmcp import ProdMCP, Depends
+from prodmcp.integrations.azure import AzureADAuth, AzureADTokenContext
+
+auth = AzureADAuth.from_env()
+app = ProdMCP("MyServer")
+app.add_security_scheme("bearer", auth.bearer_scheme)
+
+@app.tool()
+@app.get("/data")
+@app.common(security=[{"bearer": []}])
+def get_data(ctx: AzureADTokenContext = Depends(auth.require_context)) -> dict:
+    ctx.require_role("admin")
+    obo = ctx.get_obo_token()
+    return {"user": ctx.user_info, "obo_scope": obo.get("scope")}
+```
+
+---
+
 ## [0.3.10] — 2026-04-11
 
 ### 🐛 Critical Security Fix (Bug 10)
