@@ -36,7 +36,7 @@ def test_dependency_stripping_and_injection():
     assert scheme_key.startswith("auto_oauth2_")
 
     # 3. Test execution via the internal wrapper 
-    client = TestClient(app.as_fastapi())
+    client = TestClient(app.test_mcp_as_fastapi())
     resp = client.post(
         "/tools/my_secured_tool",
         json={"x": 42},
@@ -60,7 +60,7 @@ def test_standard_dependency():
         return f"{data} uses {db}"
 
     # 3. Test execution via the internal wrapper 
-    client = TestClient(app.as_fastapi())
+    client = TestClient(app.test_mcp_as_fastapi())
     resp = client.post(
         "/tools/regular_tool",
         json={"data": "Test"}

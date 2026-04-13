@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [0.4.0] — 2026-04-14
+
+### ⚠️ Breaking Changes
+
+- **REST Bridge cleanup**: Removed the `app.as_fastapi()` alias. The method is now exclusively named **`app.test_mcp_as_fastapi()`**. This consolidation clarifies that this feature is intended for testing the MCP layer via REST, rather than defining primary API endpoints.
+
+---
+
 ## [0.3.12] — 2026-04-12
 
 ### 🐛 Bug Fix (Bug 11)
@@ -153,7 +161,7 @@ Major test quality initiative across two independent audit passes, eliminating 2
 #### Test Assertion Tightening (Existing Tests)
 
 - `test_mcp_bridge.py` — prompt response now asserts exact content (`== "Summary: hello world"`) instead of substring prefix.
-- `test_mcp_bridge.py` — `as_fastapi()` backward-compat check uses `isinstance(fa, FastAPI)` instead of `type(x).__name__` string comparison.
+- `test_mcp_bridge.py` — `test_mcp_as_fastapi()` backward-compat check uses `isinstance(fa, FastAPI)` instead of `type(x).__name__` string comparison.
 - `test_run_method.py` — SSE middleware forwarding test now verifies exhaustive keyword set `{"transport","host","port","middleware"}` instead of spot-checking two keys.
 - `test_fastapi.py` — exception handler test now asserts `status == 400` and exact body content instead of `status in (400, 500)`.
 - `test_schemas.py` — `test_dict_passthrough` updated to assert `result == raw and result is not raw` (copy semantics), replacing the identity check `result is raw` that encoded the bug.
@@ -240,7 +248,7 @@ Write one handler, expose it as a REST endpoint *and* an MCP tool simultaneously
 ### Changed
 
 - **`app.run()` Signature** — Now accepts `host`, `port`, and `transport` keyword arguments. Default transport changed from plain FastMCP delegation to `"unified"` (REST + MCP).
-- **`as_fastapi()` Renamed** — Renamed to `test_mcp_as_fastapi()` to clarify it is for testing MCP handlers via HTTP, not for production REST serving (which uses `@app.get()` etc.). `as_fastapi` remains as a backward-compatible alias.
+- **`test_mcp_as_fastapi()` Renamed** — Renamed to `test_mcp_as_fastapi()` to clarify it is for testing MCP handlers via HTTP, not for production REST serving (which uses `@app.get()` etc.). `as_fastapi` remains as a backward-compatible alias.
 - **Description Updated** — Package description now reads "Unified production framework for both REST APIs and MCP servers" reflecting the expanded scope.
 - **`export_openmcp()` / `export_openmcp_json()`** — Now call `_finalize_pending()` before generating the spec to ensure deferred registrations are processed.
 - **Introspection Methods** — `list_tools()`, `list_prompts()`, `list_resources()`, `get_tool_meta()`, `get_prompt_meta()`, `get_resource_meta()` now call `_finalize_pending()`.
@@ -273,7 +281,7 @@ Initial public API release of ProdMCP — a FastAPI-like production layer on top
 - **Middleware Hooks** — Global and entity-specific `before`/`after` lifecycle hooks via `MiddlewareContext`.
 - **Network Transports** — `stdio` and SSE transport support.
 - **OpenMCP Specification Engine** — `app.export_openmcp()` generates machine-readable specs.
-- **REST Bridge** — `app.as_fastapi()` converts MCP setup into a FastAPI router.
+- **REST Bridge** — `app.test_mcp_as_fastapi()` converts MCP setup into a FastAPI router.
 - **SKILL.md** — End-to-end skill file for AI agent consumption.
 - **SSE Example** — `examples/sse_example.py` demonstrating streamable HTTP MCP.
 

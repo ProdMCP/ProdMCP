@@ -187,7 +187,7 @@ class TestSecurityContextInjection:
             received_kwargs.update(kw)
             return "ok"
 
-        client = TestClient(app.as_fastapi())
+        client = TestClient(app.test_mcp_as_fastapi())
         resp = client.post("/tools/open_tool", json={})
         assert resp.status_code == 200
         assert "__security_context__" not in received_kwargs, (
@@ -206,7 +206,7 @@ class TestSecurityContextInjection:
             received_kwargs["ctx"] = __security_context__
             return "ok"
 
-        client = TestClient(app.as_fastapi())
+        client = TestClient(app.test_mcp_as_fastapi())
         resp = client.post(
             "/tools/secure_tool",
             json={},
@@ -237,7 +237,7 @@ class TestDictSchemaWithoutProperties:
         def flexible_tool(**kw):
             return {"received": kw}
 
-        client = TestClient(app.as_fastapi())
+        client = TestClient(app.test_mcp_as_fastapi())
         resp = client.post(
             "/tools/flexible_tool",
             json={"any_key": "any_value"},
@@ -258,7 +258,7 @@ class TestDictSchemaWithoutProperties:
         def req_only_tool(**kw):
             return kw
 
-        client = TestClient(app.as_fastapi())
+        client = TestClient(app.test_mcp_as_fastapi())
         # Not testing validation result — only that the route exists
         resp = client.post(
             "/tools/req_only_tool",
@@ -288,7 +288,7 @@ class TestParameterizedResourceRoute:
             received["item_id"] = item_id
             return {"id": item_id, "name": "Widget"}
 
-        client = TestClient(app.as_fastapi())
+        client = TestClient(app.test_mcp_as_fastapi())
         resp = client.get("/resources/items/42")
 
         assert resp.status_code == 200, (
@@ -312,7 +312,7 @@ class TestParameterizedResourceRoute:
             received.update({"user_id": user_id, "section": section})
             return {"user_id": user_id, "section": section}
 
-        client = TestClient(app.as_fastapi())
+        client = TestClient(app.test_mcp_as_fastapi())
         resp = client.get("/resources/users/99/posts")
 
         assert resp.status_code == 200
@@ -327,7 +327,7 @@ class TestParameterizedResourceRoute:
         def static_res() -> str:
             return "static_value"
 
-        client = TestClient(app.as_fastapi())
+        client = TestClient(app.test_mcp_as_fastapi())
         resp = client.get("/resources/static://data")
         assert resp.status_code == 200
         assert resp.json()["content"] == "static_value"
@@ -342,7 +342,7 @@ class TestParameterizedResourceRoute:
         def items(id: str) -> str:
             return id
 
-        client = TestClient(app.as_fastapi(), raise_server_exceptions=False)
+        client = TestClient(app.test_mcp_as_fastapi(), raise_server_exceptions=False)
         # Request a URI that doesn't match "items/{id}" pattern
         resp = client.get("/resources/completely://different/path")
         # Must not be 200 (should be 404 from the fallback attempting FastMCP + failing)
@@ -670,7 +670,7 @@ class TestExceptionPropagationToFastAPIHandlers:
         def fail_tool() -> str:
             raise ValueError("intentional error")
 
-        client = TestClient(app.as_fastapi(), raise_server_exceptions=False)
+        client = TestClient(app.test_mcp_as_fastapi(), raise_server_exceptions=False)
         resp = client.post("/tools/fail_tool", json={})
 
         assert resp.status_code == 400, (
@@ -690,7 +690,7 @@ class TestExceptionPropagationToFastAPIHandlers:
         def secure_fn() -> str:
             return "ok"
 
-        client = TestClient(app.as_fastapi(), raise_server_exceptions=False)
+        client = TestClient(app.test_mcp_as_fastapi(), raise_server_exceptions=False)
         # No Authorization header → ProdMCPSecurityError → 403
         resp = client.post("/tools/secure", json={})
         assert resp.status_code == 403
@@ -708,7 +708,7 @@ class TestExceptionPropagationToFastAPIHandlers:
         def val_tool(name: str) -> str:
             return name
 
-        client = TestClient(app.as_fastapi(), raise_server_exceptions=False)
+        client = TestClient(app.test_mcp_as_fastapi(), raise_server_exceptions=False)
         # Send wrong body (missing required 'name') → 422
         resp = client.post(
             "/tools/val_tool",
@@ -727,7 +727,7 @@ class TestExceptionPropagationToFastAPIHandlers:
         def http_exc_tool() -> str:
             raise FastAPIHTTPException(status_code=418, detail="I'm a teapot")
 
-        client = TestClient(app.as_fastapi(), raise_server_exceptions=False)
+        client = TestClient(app.test_mcp_as_fastapi(), raise_server_exceptions=False)
         resp = client.post("/tools/http_exc_tool", json={})
         assert resp.status_code == 418
         assert "teapot" in resp.json()["detail"]

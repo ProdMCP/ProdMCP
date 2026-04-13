@@ -239,22 +239,8 @@ class TestProdMCPBackwardCompat:
         assert meta["tags"] == {"legacy"}
         assert "logging" in meta["middleware"]
 
-    def test_as_fastapi_alias(self):
-        """The old as_fastapi() method should still work."""
-        from unittest.mock import MagicMock
-        from prodmcp import ProdMCP
-        app = ProdMCP("T")
-        app._mcp = MagicMock()
-
-        @app.tool(name="t")
-        def t():
-            return 1
-
-        fa = app.as_fastapi()
-        assert fa is not None
-
     def test_test_mcp_as_fastapi(self):
-        """The new test_mcp_as_fastapi() method should work."""
+        """The test_mcp_as_fastapi() method should work."""
         from unittest.mock import MagicMock
         from prodmcp import ProdMCP
         app = ProdMCP("T")

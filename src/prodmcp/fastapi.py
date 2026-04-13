@@ -40,7 +40,7 @@ def create_fastapi_app(app: "ProdMCP", title: str | None = None) -> FastAPI:
 
     # ── Apply ASGI-level middlewares (e.g. CORSMiddleware) ─────────────
     # Mirrors create_unified_app() — same registered configs must be applied
-    # here so that app.as_fastapi() / app.test_mcp_as_fastapi() also get
+    # here so that app.test_mcp_as_fastapi() / app.test_mcp_as_fastapi() also get
     # CORS, GZip, TrustedHost, etc. without the user having to re-apply them.
     for mw_cfg in reversed(app._middleware_manager.asgi_middlewares):
         fastapi_app.add_middleware(mw_cfg.cls, **mw_cfg.kwargs)
@@ -222,7 +222,7 @@ def _add_prompt_route(
 
     # D8/E2 fix: reuse the pre-built wrapped handler stored during _register_prompt.
     # Previously _build_handler() was always called here, causing double middleware
-    # wrapping in as_fastapi() / test_mcp_as_fastapi() — LoggingMiddleware fired twice.
+    # wrapping in test_mcp_as_fastapi() / test_mcp_as_fastapi() — LoggingMiddleware fired twice.
     # _register_prompt now stores "wrapped" in the registry (mirrors the B2 tool fix).
     if "wrapped" in meta:
         wrapped_handler = meta["wrapped"]

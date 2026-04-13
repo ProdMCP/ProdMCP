@@ -1,4 +1,4 @@
-"""Tests for the MCP testing bridge (test_mcp_as_fastapi / as_fastapi).
+"""Tests for the MCP testing bridge (test_mcp_as_fastapi).
 
 These tests verify the functionality that auto-maps MCP entities
 to REST routes for testing purposes:
@@ -120,26 +120,14 @@ class TestMCPBridgeHTTPCalls:
         assert resp.json() == 21
 
 
-class TestMCPBridgeBackwardCompat:
-    """as_fastapi() should be an alias for test_mcp_as_fastapi()."""
-
-    def test_alias_returns_same_app(self):
+    def test_bridge_app_is_fastapi_instance(self):
+        """P2-9: Bridge must return a genuine FastAPI instance, not just a class-name match."""
         from unittest.mock import MagicMock
+        from fastapi import FastAPI
         app = ProdMCP("T")
         app._mcp = MagicMock()
-
-        @app.tool(name="t")
-        def t():
-            return 1
-
-        fa1 = app.test_mcp_as_fastapi()
-        fa2 = app.as_fastapi()
-        # P2-9 fix: use isinstance instead of type(x).__name__ comparison.
-        # Comparing class name strings passes even if the actual class differs
-        # (e.g. a Starlette subclass named "FastAPI" would fool the old check).
-        from fastapi import FastAPI as _FastAPI
-        assert isinstance(fa1, _FastAPI)
-        assert isinstance(fa2, _FastAPI)
+        fa = app.test_mcp_as_fastapi()
+        assert isinstance(fa, FastAPI)
 
     def test_bridge_app_has_title(self):
         from unittest.mock import MagicMock

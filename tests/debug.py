@@ -19,7 +19,7 @@ class SecureInput(BaseModel):
 def my_secure_tool(secret: str, __security_context__=None) -> str:
     return f"Access granted to {secret}"
 
-client = TestClient(app.as_fastapi())
+client = TestClient(app.test_mcp_as_fastapi())
 
 resp = client.post(
     "/tools/secure_tool",

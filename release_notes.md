@@ -204,7 +204,7 @@ This release brings the full production-ready capability of ProdMCP, featuring:
 - **Middleware Hooks**: Global and entity-specific lifecycle hooks (`before`, `after`) using `MiddlewareContext` for request logging, metrics, and granular control.
 - **Network Transports**: Support for basic `stdio` execution and streamable HTTP endpoints using Server-Sent Events (`sse`).
 - **OpenMCP Specification Engine**: Auto-generates native OpenSpec definitions to define endpoints programmatically (`app.export_openmcp()`).
-- **REST Bridge**: Instantly convert an MCP setup into a fully documented FastAPI router endpoint (`app.as_fastapi()`).
+- **REST Bridge**: Instantly convert an MCP setup into a fully documented FastAPI router endpoint (`app.test_mcp_as_fastapi()`).
 
 **Documentation Improvements:**
 - Added robust examples covering SSE Server capabilities (`examples/sse_example.py`).

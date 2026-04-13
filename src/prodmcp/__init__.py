@@ -77,7 +77,7 @@ try:
     from importlib.metadata import version as _pkg_version
     __version__: str = _pkg_version("prodmcp")
 except Exception:  # PackageNotFoundError or any import error
-    __version__ = "0.3.8"
+    __version__ = "0.4.0"
 
 __all__ = [
     # Core

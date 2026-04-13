@@ -178,7 +178,7 @@ class ProdMCP:
 
         These middlewares are applied directly to the underlying ``FastAPI``
         application during :meth:`run` (via :func:`~prodmcp.router.create_unified_app`)
-        and to the app returned by :meth:`as_fastapi`.
+        and to the app returned by :meth:`test_mcp_as_fastapi`.
 
         Use this for HTTP-transport–level concerns such as CORS, GZip,
         TrustedHost, session cookies, etc.
@@ -1177,9 +1177,6 @@ class ProdMCP:
         self._finalize_pending()
         from .fastapi import create_fastapi_app
         return create_fastapi_app(self)
-
-    # Backward compatibility alias
-    as_fastapi = test_mcp_as_fastapi
 
     # ── Run ────────────────────────────────────────────────────────────
 

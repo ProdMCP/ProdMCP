@@ -182,7 +182,7 @@ class TestMiddlewareOnPromptsAndResources:
         def greet(name: str = "World") -> str:
             return f"Hello {name}"
 
-        # Force finalization (normally called by run() / as_fastapi())
+        # Force finalization (normally called by run() / test_mcp_as_fastapi())
         app._finalize_pending()
 
         # The prompt handler registered with FastMCP should be wrapped.

@@ -243,7 +243,7 @@ if __name__ == "__main__":
 **FastAPI Full Bridge Integration** 
 ProdMCP comes directly with a bridge that compiles all MCP entities strictly to documented FastAPI REST routes (`/tools/...`, `/prompts/...`, `/resources/...`). 
 ```python
-fastapi_app = app.as_fastapi() 
+fastapi_app = app.test_mcp_as_fastapi() 
 # Run via terminal: uvicorn my_file:fastapi_app --reload
 ```
 

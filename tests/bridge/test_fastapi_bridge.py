@@ -31,7 +31,7 @@ async def test_fastapi_routes():
     def my_prompt() -> str:
         return "Hello"
 
-    fastapi_app = app.as_fastapi()
+    fastapi_app = app.test_mcp_as_fastapi()
     assert fastapi_app.title == "TestServer"
 
     routes = [r.path for r in fastapi_app.routes if hasattr(r, "path")]
@@ -50,7 +50,7 @@ async def test_fastapi_client():
     def my_tool(x: int) -> int:
         return x + 1
 
-    fastapi_app = app.as_fastapi()
+    fastapi_app = app.test_mcp_as_fastapi()
     client = TestClient(fastapi_app)
 
     response = client.post("/tools/my_tool", json={"x": 5})
@@ -90,7 +90,7 @@ async def test_fastapi_comprehensive():
     @app.resource(uri="resource://2", name="res_2")
     def r2() -> str: return "res2"
 
-    fastapi_app = app.as_fastapi()
+    fastapi_app = app.test_mcp_as_fastapi()
     client = TestClient(fastapi_app)
 
     routes = {r.path for r in fastapi_app.routes if hasattr(r, "path")}
@@ -152,7 +152,7 @@ async def test_fastapi_security_and_validation():
     def no_input() -> str:
         return "Nothing"
 
-    client = TestClient(app.as_fastapi())
+    client = TestClient(app.test_mcp_as_fastapi())
 
     # 1. Missing security (403)
     resp = client.post("/tools/secure_tool", json={"secret": "abc"})
@@ -191,9 +191,9 @@ async def test_fastapi_security_and_validation():
 
 
 @pytest.mark.skipif(not HAS_FASTAPI, reason="FastAPI is not installed")
-async def test_asgi_middleware_in_as_fastapi():
+async def test_asgi_middleware_in_test_mcp_as_fastapi():
     """Bug 2 regression: ASGI middleware registered via add_asgi_middleware() must
-    be applied by create_fastapi_app() (as_fastapi()), not only by create_unified_app().
+    be applied by create_fastapi_app() (test_mcp_as_fastapi()), not only by create_unified_app().
     """
     from unittest.mock import MagicMock
     from fastapi.middleware.cors import CORSMiddleware
@@ -213,7 +213,7 @@ async def test_asgi_middleware_in_as_fastapi():
     def ping() -> str:
         return "pong"
 
-    fastapi_app = app.as_fastapi()
+    fastapi_app = app.test_mcp_as_fastapi()
     client = TestClient(fastapi_app)
 
     # Simple cross-origin request should carry CORS header
@@ -227,9 +227,9 @@ async def test_asgi_middleware_in_as_fastapi():
 
 
 @pytest.mark.skipif(not HAS_FASTAPI, reason="FastAPI is not installed")
-async def test_exception_handler_in_as_fastapi():
+async def test_exception_handler_in_test_mcp_as_fastapi():
     """Bug 6 regression: exception handlers registered via add_exception_handler()
-    must survive create_fastapi_app() (as_fastapi() path).
+    must survive create_fastapi_app() (test_mcp_as_fastapi() path).
     """
     from unittest.mock import MagicMock
     from fastapi import Request
@@ -248,7 +248,7 @@ async def test_exception_handler_in_as_fastapi():
     def raise_tool() -> str:
         raise ValueError("test value error")
 
-    fastapi_app = app.as_fastapi()
+    fastapi_app = app.test_mcp_as_fastapi()
     client = TestClient(fastapi_app, raise_server_exceptions=False)
     resp = client.post("/tools/raise_tool", json={})
     # P2-10 fix: _execute_wrapped no longer swallows non-ProdMCP exceptions.

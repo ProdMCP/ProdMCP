@@ -67,8 +67,8 @@ tests/
 
 | File | What it tests |
 |------|---------------|
-| `test_fastapi_bridge.py` | `app.as_fastapi()`: route creation, execution, security (403/422/200), ASGI middleware on bridge, ValueError → 400 via custom handler |
-| `test_mcp_test_bridge.py` | `test_mcp_as_fastapi()`: route creation, exact HTTP responses, `as_fastapi()` isinstance check |
+| `test_fastapi_bridge.py` | `app.test_mcp_as_fastapi()`: route creation, execution, security (403/422/200), ASGI middleware on bridge, ValueError → 400 via custom handler |
+| `test_mcp_test_bridge.py` | `test_mcp_as_fastapi()`: route creation, exact HTTP responses, `test_mcp_as_fastapi()` isinstance check |
 | `test_http_methods.py` | `@app.get/post/put/delete/patch`: registration, path params, response models, tags, status codes, function identity |
 | `test_unified_router.py` | `create_unified_app()`: FastAPI app, CRUD, CORS, MCP sub-app CORS, falsy kwargs, finalization, exception handlers |
 
