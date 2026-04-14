@@ -7,9 +7,10 @@ the ProdMCP registry.
 from __future__ import annotations
 
 import json
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Type
 
-from .schemas import extract_schema_ref
+from .schemas import extract_schema_ref, resolve_schema
+from .fastapi import _extract_output_description
 
 if TYPE_CHECKING:
     from .app import ProdMCP
@@ -57,6 +58,11 @@ def generate_spec(app: "ProdMCP") -> dict[str, Any]:
             "version": app.version,
         },
     }
+    if app.description:
+        spec["info"]["description"] = app.description
+    
+    if app.servers:
+        spec["servers"] = app.servers
 
     if tools:
         spec["tools"] = tools
@@ -66,6 +72,13 @@ def generate_spec(app: "ProdMCP") -> dict[str, Any]:
         spec["resources"] = resources
     if components.get("schemas") or components.get("securitySchemes"):
         spec["components"] = components
+
+    # Inject global security field (applies to ALL capabilities by default)
+    if schemes:
+        spec["security"] = [{name: []} for name in schemes]
+
+    # Harden component schemas for scanner compliance (mirrors fastapi.py steps 4+5)
+    _harden_openmcp_schemas(spec)
 
     return spec
 
@@ -91,6 +104,11 @@ def _build_tools(app: ProdMCP, components: dict[str, Any]) -> dict[str, Any]:
         if output_ref:
             tool_spec["output"] = output_ref
 
+        # Output description — derived from the output model's docstring
+        output_desc = _extract_output_description(meta.get("output_schema"))
+        if output_desc and output_desc != "Successful Response":
+            tool_spec["output_description"] = output_desc
+
         # Security
         security_config = meta.get("security", [])
         if security_config:
@@ -108,10 +126,24 @@ def _build_tools(app: ProdMCP, components: dict[str, Any]) -> dict[str, Any]:
             if serializable:
                 tool_spec["middleware"] = serializable
 
-        # Tags
-        tags = meta.get("tags")
-        if tags:
-            tool_spec["tags"] = sorted(tags) if isinstance(tags, set) else tags
+        # Error handling (42Crunch / MCPcrunch compliance)
+        from .fastapi import (
+            ErrorDetail,
+            ProdMCPHTTPValidationError,
+        )
+
+        error_handling: dict[str, Any] = {
+            "406": extract_schema_ref(ErrorDetail, components),
+            "415": extract_schema_ref(ErrorDetail, components),
+            "422": extract_schema_ref(ProdMCPHTTPValidationError, components),
+            "429": extract_schema_ref(ErrorDetail, components),
+            "default": extract_schema_ref(ErrorDetail, components),
+        }
+        if security_config:
+            error_handling["401"] = extract_schema_ref(ErrorDetail, components)
+            error_handling["403"] = extract_schema_ref(ErrorDetail, components)
+
+        tool_spec["error_handling"] = error_handling
 
         tools[name] = tool_spec
 
@@ -137,9 +169,37 @@ def _build_prompts(app: ProdMCP, components: dict[str, Any]) -> dict[str, Any]:
         if output_ref:
             prompt_spec["output"] = output_ref
 
+        # Output description
+        output_desc = _extract_output_description(meta.get("output_schema"))
+        if output_desc and output_desc != "Successful Response":
+            prompt_spec["output_description"] = output_desc
+
         tags = meta.get("tags")
         if tags:
             prompt_spec["tags"] = sorted(tags) if isinstance(tags, set) else tags
+
+        # Security (mirrors tool security injection)
+        security_config = meta.get("security", [])
+        if security_config:
+            prompt_spec["security"] = app._security_manager.generate_security_spec(
+                security_config
+            )
+
+        # Standard errors for prompts
+        from .fastapi import ErrorDetail, ProdMCPHTTPValidationError
+
+        error_handling: dict[str, Any] = {
+            "406": extract_schema_ref(ErrorDetail, components),
+            "415": extract_schema_ref(ErrorDetail, components),
+            "422": extract_schema_ref(ProdMCPHTTPValidationError, components),
+            "429": extract_schema_ref(ErrorDetail, components),
+            "default": extract_schema_ref(ErrorDetail, components),
+        }
+        if security_config:
+            error_handling["401"] = extract_schema_ref(ErrorDetail, components)
+            error_handling["403"] = extract_schema_ref(ErrorDetail, components)
+
+        prompt_spec["error_handling"] = error_handling
 
         prompts[name] = prompt_spec
 
@@ -165,9 +225,35 @@ def _build_resources(app: ProdMCP, components: dict[str, Any]) -> dict[str, Any]
         if output_ref:
             resource_spec["output"] = output_ref
 
+        # Output description
+        output_desc = _extract_output_description(meta.get("output_schema"))
+        if output_desc and output_desc != "Successful Response":
+            resource_spec["output_description"] = output_desc
+
         tags = meta.get("tags")
         if tags:
             resource_spec["tags"] = sorted(tags) if isinstance(tags, set) else tags
+
+        # Security
+        security_config = meta.get("security", [])
+        if security_config:
+            resource_spec["security"] = app._security_manager.generate_security_spec(
+                security_config
+            )
+
+        # Standard errors for resources (no 415/422 as GET has no body)
+        from .fastapi import ErrorDetail
+
+        error_handling: dict[str, Any] = {
+            "406": extract_schema_ref(ErrorDetail, components),
+            "429": extract_schema_ref(ErrorDetail, components),
+            "default": extract_schema_ref(ErrorDetail, components),
+        }
+        if security_config:
+            error_handling["401"] = extract_schema_ref(ErrorDetail, components)
+            error_handling["403"] = extract_schema_ref(ErrorDetail, components)
+
+        resource_spec["error_handling"] = error_handling
 
         resources[name] = resource_spec
 
@@ -198,3 +284,33 @@ def _warn_on_unserializable(obj: Any) -> Any:
 def spec_to_json(spec: dict[str, Any], indent: int = 2) -> str:
     """Serialize an OpenMCP spec to a JSON string."""
     return json.dumps(spec, indent=indent, default=_warn_on_unserializable)
+
+
+def _harden_openmcp_schemas(spec: dict[str, Any]) -> None:
+    """Harden component schemas in an OpenMCP spec for scanner compliance.
+
+    Mirrors the FastAPI bridge steps 4+5:
+      4. Set ``additionalProperties: false`` on object schemas that have
+         properties but don't use combining operations.
+      5. Set ``additionalProperties: false`` on property-level anyOf/oneOf
+         where all sub-schemas are primitives (Pydantic's Optional pattern).
+    """
+    schemas = spec.get("components", {}).get("schemas", {})
+
+    # Step 4: top-level object schemas
+    for comp_schema in schemas.values():
+        if (
+            isinstance(comp_schema, dict)
+            and comp_schema.get("type") == "object"
+            and "properties" in comp_schema
+            and "additionalProperties" not in comp_schema
+            and "allOf" not in comp_schema
+            and "anyOf" not in comp_schema
+            and "oneOf" not in comp_schema
+        ):
+            comp_schema["additionalProperties"] = False
+
+    # Step 5: nested anyOf/oneOf primitives
+    from .fastapi import _harden_nested_anyof
+    _harden_nested_anyof(spec)
+

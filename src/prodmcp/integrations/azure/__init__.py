@@ -22,7 +22,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 import requests
 
@@ -30,7 +30,55 @@ from prodmcp.exceptions import ProdMCPSecurityError
 from prodmcp.security.http import HTTPBearer
 from prodmcp.security.base import SecurityContext
 
+try:
+    from pydantic import BaseModel, ConfigDict, Field
+except ImportError:  # pragma: no cover — pydantic is a core dep
+    BaseModel = None  # type: ignore[assignment,misc]
+    ConfigDict = None  # type: ignore[assignment,misc]
+    Field = None  # type: ignore[assignment,misc]
+
+# Import the model-level anyOf hardening callback (avoids post-patching OpenAPI)
+try:
+    from prodmcp.fastapi import _harden_anyof_in_schema
+except ImportError:  # pragma: no cover — when fastapi extras not installed
+    _harden_anyof_in_schema = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
+
+
+# ── Typed response models (strict schemas for 42Crunch / OpenAPI compliance) ──
+
+# Patterns for Azure AD claim values
+_UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+_SAFE_STRING_PATTERN = r"^[\w\s@.\-_+:/#]{0,}$"
+
+
+class AzureADUserInfo(BaseModel):
+    """Common user-identity fields extracted from a verified Azure AD JWT."""
+    model_config = ConfigDict(extra="forbid", json_schema_extra=_harden_anyof_in_schema)
+
+    oid: str | None = Field(default=None, max_length=36, pattern=_UUID_PATTERN, description="Azure AD Object ID (UUID)")
+    tid: str | None = Field(default=None, max_length=36, pattern=_UUID_PATTERN, description="Azure AD Tenant ID (UUID)")
+    preferred_username: str | None = Field(default=None, max_length=256, pattern=_SAFE_STRING_PATTERN, description="User principal name / email")
+    name: str | None = Field(default=None, max_length=256, pattern=_SAFE_STRING_PATTERN, description="Display name")
+    aud: str | None = Field(default=None, max_length=512, pattern=_SAFE_STRING_PATTERN, description="Token audience")
+    scp: str | None = Field(default=None, max_length=1024, pattern=_SAFE_STRING_PATTERN, description="Delegated permission scopes")
+    roles: list[Annotated[str, Field(max_length=128, pattern=_SAFE_STRING_PATTERN)]] = Field(default=[], max_length=50, description="Application roles")
+
+
+class AzureADOboTokenResponse(BaseModel):
+    """On-Behalf-Of token exchange response metadata.
+
+    Wraps the raw Microsoft token endpoint response into a strict schema.
+    The ``access_token`` field is deliberately excluded to prevent credential
+    leakage when the model is serialised into API responses.
+    """
+    model_config = ConfigDict(extra="forbid", json_schema_extra=_harden_anyof_in_schema)
+
+    token_type: str | None = Field(default=None, max_length=20, pattern=r"^[A-Za-z]+$", description="Token type (e.g. Bearer)")
+    scope: str | None = Field(default=None, max_length=1024, pattern=_SAFE_STRING_PATTERN, description="Granted scopes")
+    expires_in: int | None = Field(default=None, ge=0, le=86400, description="Token lifetime in seconds")
+    has_access_token: bool = Field(default=False, description="Whether an access_token was returned")
 
 
 # ── Module-level JWKS / OpenID config caches (shared across all AzureADAuth instances) ──
@@ -80,17 +128,17 @@ class AzureADTokenContext:
     # Convenient claim accessors ────────────────────────────────────────────────
 
     @property
-    def user_info(self) -> dict[str, Any]:
+    def user_info(self) -> AzureADUserInfo:
         """Common user-identity fields from the JWT claims."""
-        return {
-            "oid": self.claims.get("oid"),
-            "tid": self.claims.get("tid"),
-            "preferred_username": self.claims.get("preferred_username"),
-            "name": self.claims.get("name"),
-            "aud": self.claims.get("aud"),
-            "scp": self.claims.get("scp"),
-            "roles": self.claims.get("roles", []),
-        }
+        return AzureADUserInfo(
+            oid=self.claims.get("oid"),
+            tid=self.claims.get("tid"),
+            preferred_username=self.claims.get("preferred_username"),
+            name=self.claims.get("name"),
+            aud=self.claims.get("aud"),
+            scp=self.claims.get("scp"),
+            roles=self.claims.get("roles", []),
+        )
 
     @property
     def roles(self) -> list[str]:
@@ -433,6 +481,36 @@ class AzureADBearerScheme(HTTPBearer):
         claims = self._auth._validate_token(token)
         return SecurityContext(token=token, scopes=list(claims.get("roles", [])))
 
+    def to_spec(self) -> dict[str, Any]:
+        """Emit a full OAuth2 authorizationCode flow spec using Azure AD tenant URLs.
+
+        This produces a detailed securitySchemes entry that passes 42Crunch
+        OMCP-SEC-012 and related OpenAPI security quality gates.
+        """
+        tenant_id = getattr(self._auth, "tenant_id", None) or "common"
+        audience = getattr(self._auth, "api_audience", None) or ""
+
+        # Build Azure AD OAuth2 endpoint URLs
+        base_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0"
+        authorization_url = f"{base_url}/authorize"
+        token_url = f"{base_url}/token"
+
+        # Use the API audience as a default scope if defined
+        scopes: dict[str, str] = {}
+        if audience:
+            scopes[f"{audience}/.default"] = "Default permissions for this API"
+
+        return {
+            "type": "oauth2",
+            "flows": {
+                "authorizationCode": {
+                    "authorizationUrl": authorization_url,
+                    "tokenUrl": token_url,
+                    "scopes": scopes,
+                }
+            },
+        }
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -451,4 +529,10 @@ def _obo_hint(error_code: str) -> str:
     return hints.get(error_code, "Check Azure app registration, API permissions, and consent settings.")
 
 
-__all__ = ["AzureADAuth", "AzureADTokenContext", "AzureADBearerScheme"]
+__all__ = [
+    "AzureADAuth",
+    "AzureADTokenContext",
+    "AzureADBearerScheme",
+    "AzureADUserInfo",
+    "AzureADOboTokenResponse",
+]

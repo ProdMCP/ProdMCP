@@ -63,6 +63,8 @@ class ProdMCP:
         description: Server description.
         strict_output: If True, output validation errors are raised globally.
         mcp_path: Sub-path to mount the MCP SSE endpoint (default "/mcp").
+        servers: Optional list of server dicts for OpenAPI spec
+            (e.g. ``[{"url": "https://api.example.com"}]``).
         **fastmcp_kwargs: Extra kwargs passed to FastMCP().
     """
 
@@ -75,6 +77,7 @@ class ProdMCP:
         description: str = "",
         strict_output: bool = True,
         mcp_path: str = "/mcp",
+        servers: list[dict[str, Any]] | None = None,
         **fastmcp_kwargs: Any,
     ) -> None:
         # FastAPI uses 'title', FastMCP uses positional 'name'
@@ -83,6 +86,7 @@ class ProdMCP:
         self.description = description
         self.strict_output = strict_output
         self.mcp_path = mcp_path
+        self.servers = servers
         self._fastmcp_kwargs = fastmcp_kwargs
 
         # Internal registry — stores metadata for all entities
@@ -350,9 +354,24 @@ class ProdMCP:
         eff_tags = _merge_common(fn, "tags", tags)
         eff_strict_val = _merge_common(fn, "strict", strict)
 
+        # Fallback: if no explicit output_schema, read the function's return annotation.
+        # This lets docstrings on return-type Pydantic models propagate to the spec
+        # without requiring developers to repeat `output_schema=MyModel` twice.
+        if eff_output is None:
+            import inspect as _ins
+            ret = _ins.signature(fn).return_annotation
+            if ret is not _ins.Parameter.empty and ret is not type(None):
+                from pydantic import BaseModel as _BM
+                # Accept: concrete BaseModel subclasses or Union/Optional types
+                is_model = isinstance(ret, type) and issubclass(ret, _BM)
+                is_union = hasattr(ret, "__args__")
+                if is_model or is_union:
+                    eff_output = ret
+
         tool_name = name or fn.__name__
         tool_desc = description or fn.__doc__ or ""
         is_strict = eff_strict_val if eff_strict_val is not None else self.strict_output
+
 
         # Build the core handler (validation + security + middleware)
         wrapped = self._build_handler(
@@ -485,6 +504,9 @@ class ProdMCP:
         )(mcp_handler)
 
 
+
+
+
     def prompt(
         self,
         name: str | None = None,
@@ -523,6 +545,15 @@ class ProdMCP:
         eff_output = _merge_common(fn, "output_schema", output_schema)
         eff_tags = _merge_common(fn, "tags", tags)
 
+        # Fallback: read return annotation when output_schema not set explicitly.
+        if eff_output is None:
+            import inspect as _ins
+            ret = _ins.signature(fn).return_annotation
+            if ret is not _ins.Parameter.empty and ret is not type(None):
+                from pydantic import BaseModel as _BM
+                if (isinstance(ret, type) and issubclass(ret, _BM)) or hasattr(ret, "__args__"):
+                    eff_output = ret
+
         prompt_name = name or fn.__name__
         prompt_desc = description or fn.__doc__ or ""
 
@@ -556,6 +587,8 @@ class ProdMCP:
             name=prompt_name,
             description=prompt_desc.strip(),
         )(wrapped)
+
+
 
     def resource(
         self,
@@ -597,9 +630,19 @@ class ProdMCP:
         eff_output = _merge_common(fn, "output_schema", output_schema)
         eff_tags = _merge_common(fn, "tags", tags)
 
+        # Fallback: read return annotation when output_schema not set explicitly.
+        if eff_output is None:
+            import inspect as _ins
+            ret = _ins.signature(fn).return_annotation
+            if ret is not _ins.Parameter.empty and ret is not type(None):
+                from pydantic import BaseModel as _BM
+                if (isinstance(ret, type) and issubclass(ret, _BM)) or hasattr(ret, "__args__"):
+                    eff_output = ret
+
         resource_name = name or fn.__name__
         resource_desc = description or fn.__doc__ or ""
         resource_uri = uri or f"resource://{resource_name}"
+
 
         # B12 fix: warn on duplicate URI registrations.
         # Two resources with the same URI co-exist under different names, but the
@@ -655,6 +698,8 @@ class ProdMCP:
             fastmcp_kwargs["mime_type"] = mime_type
 
         self.mcp.resource(resource_uri, **fastmcp_kwargs)(wrapped)
+
+
 
     # ── HTTP Method Decorators (FastAPI-identical) ──────────────────────
 

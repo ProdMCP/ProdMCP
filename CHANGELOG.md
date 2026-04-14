@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [0.5.0] — 2026-04-15
+
+### ✨ Features
+
+#### Automatic Response Description from Pydantic Model Docstrings
+- **OpenAPI `responses.200.description`** is now automatically derived from the output Pydantic model's class docstring — no new decorator parameter needed.
+- **OpenMCP `output_description`** field is now populated on all tools, prompts, and resources using the same mechanism.
+- Supports all output schema forms:
+  - **Single model** → uses the model's docstring directly.
+  - **`Union[A, B]`** → composes `"ModelA: <desc> | ModelB: <desc>"` using each variant's docstring.
+  - **`Optional[X]`** → same as Union, skipping `NoneType`.
+  - **`dict` schema** → reads the `description` key.
+- The `"Successful Response"` FastAPI default is treated as missing and replaced.
+
+**Usage — add a docstring to your output model:**
+```python
+class TicketResponse(BaseModel):
+    """A successfully created or retrieved support ticket."""
+    id: str
+    status: TicketStatus
+```
+This propagates automatically to both the OpenAPI and OpenMCP specs — zero additional code.
+
+#### Return-Annotation `output_schema` Fallback
+- `_register_tool`, `_register_prompt`, and `_register_resource` now automatically read the function's **return type annotation** (`-> MyModel`) as the `output_schema` when `output_schema` is not set explicitly.
+- Supports concrete `BaseModel` subclasses and `Union` / `Optional` types.
+- This means docstrings, schema references, and `output_description` all propagate for tools defined with standard Python return annotations — no need to duplicate `output_schema=MyModel` in the decorator.
+
+**Before (verbose):**
+```python
+@app.tool(name="create_ticket", output_schema=TicketResponse)
+def create_ticket(payload: TicketCreate) -> TicketResponse: ...
+```
+**After (idiomatic):**
+```python
+@app.tool(name="create_ticket")
+def create_ticket(payload: TicketCreate) -> TicketResponse: ...
+```
+
+#### Security Specification Hardening
+- **`AzureADBearerScheme.to_spec()`** now emits a full OAuth2 `authorizationCode` flow definition including `authorizationUrl`, `tokenUrl`, and `scopes` — satisfying 42Crunch `OMCP-SEC-012` requirements.
+- **Global `security` field** injected into generated OpenAPI and OpenMCP specs when security schemes are defined.
+- **Per-operation `security`** requirements now injected for **prompts** and **resources** in addition to tools.
+- **`401` / `403` error responses** automatically added to all secured operations.
+- `OAuth2` and `apiKey` security scheme definitions added to `components.securitySchemes` in the generated OpenAPI spec.
+
+#### OpenMCP Spec — New `output_description` Field
+- All `tools`, `prompts`, and `resources` entries in generated OpenMCP specs now include an `output_description` field when the output model has a docstring.
+
+### 🐛 Bug Fixes
+- Fixed duplicate `app = ProdMCP(...)` in example app that silently dropped all registered tools and resources from the generated spec.
+- Fixed `_extract_output_description` filtering of Pydantic's auto-generated `"Usage docs: ..."` docstring (which is not a meaningful description).
+
+### 🔧 Internal
+- Added `_extract_output_description(output_schema)` helper in `fastapi.py` — shared by the OpenAPI route builder and `openmcp.py` spec generator.
+- `openmcp.py` imports and uses `_extract_output_description` for consistent output_description derivation across all spec formats.
+
+---
+
 ## [0.4.0] — 2026-04-14
 
 ### ⚠️ Breaking Changes
