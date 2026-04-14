@@ -1,6 +1,6 @@
 # ProdMCP
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.4.0-blue)](https://pypi.org/project/prodmcp/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.5.0-blue)](https://pypi.org/project/prodmcp/)
 [![Python versions](https://img.shields.io/pypi/pyversions/prodmcp.svg)](https://pypi.org/project/prodmcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![FOSSA](https://img.shields.io/badge/FOSSA-license%20compliant-brightgreen)](https://app.fossa.com/projects/custom%2B61520%2Fprodmcp)
@@ -29,17 +29,95 @@ pip install prodmcp[rest]        # + FastAPI + Uvicorn for the unified server
 
 ```python
 from prodmcp import ProdMCP
+from pydantic import BaseModel
 
 app = ProdMCP("MyServer", version="1.0.0")
 
+class UserResponse(BaseModel):
+    """A user's public profile information."""
+    name: str
+    email: str
+
 @app.tool(name="get_user", description="Fetch user by ID")
 @app.get("/users/{user_id}")
-def get_user(user_id: str) -> dict:
-    return {"name": "Alice", "email": "alice@example.com"}
+def get_user(user_id: str) -> UserResponse:
+    return UserResponse(name="Alice", email="alice@example.com")
 
 if __name__ == "__main__":
     app.run()  # REST at / (Swagger at /docs) + MCP at /mcp/mcp
 ```
+
+The `UserResponse` docstring automatically appears in the OpenAPI `responses.200.description` and the OpenMCP `output_description` field — no extra code required.
+
+---
+
+## ✨ What's New in v0.5.0
+
+### Response Descriptions from Pydantic Docstrings
+
+ProdMCP now auto-derives the `responses.200.description` (OpenAPI) and `output_description` (OpenMCP) from your output Pydantic model's class docstring. No decorator parameter needed.
+
+```python
+class TicketResponse(BaseModel):
+    """A successfully created or retrieved support ticket."""
+    id: str
+    status: str
+
+@app.tool(name="create_ticket", description="Open a new support ticket")
+def create_ticket(payload: TicketCreate) -> TicketResponse:
+    ...
+```
+
+Generated OpenAPI:
+```json
+"responses": {
+  "200": {
+    "description": "A successfully created or retrieved support ticket."
+  }
+}
+```
+
+Generated OpenMCP:
+```json
+"output_description": "A successfully created or retrieved support ticket."
+```
+
+**Union / Optional support:**
+
+```python
+class InvoiceResponse(BaseModel):
+    """A finalized invoice record."""
+    ...
+
+class DraftResponse(BaseModel):
+    """A draft invoice pending approval."""
+    ...
+
+def get_invoice(...) -> Union[InvoiceResponse, DraftResponse]:
+    ...
+# output_description → "InvoiceResponse: A finalized invoice record. | DraftResponse: A draft invoice pending approval."
+```
+
+### Return-Annotation `output_schema` Fallback
+
+`_register_tool`, `_register_prompt`, and `_register_resource` now read the function's return annotation (`-> MyModel`) as the `output_schema` automatically when `output_schema=` is not specified explicitly.
+
+```python
+# Before (explicit — still works):
+@app.tool(name="get_weather", output_schema=WeatherResponse)
+def get_weather(city: str) -> WeatherResponse: ...
+
+# After (idiomatic — docstring propagates automatically):
+@app.tool(name="get_weather")
+def get_weather(city: str) -> WeatherResponse: ...
+```
+
+### Security Specification Hardening (42Crunch / MCPcrunch Compliance)
+
+- **Full OAuth2 `authorizationCode` flow** emitted in `components.securitySchemes` — satisfies `OMCP-SEC-012`.
+- **Global `security` field** injected into generated OpenAPI and OpenMCP specs.
+- **Per-operation `security`** now injected for prompts and resources, not just tools.
+- **401 / 403 error responses** auto-added to all secured operations.
 
 ---
 
@@ -115,7 +193,6 @@ session_service = InMemorySessionService()
 @app.post("/api/chat")
 @app.common(security=[{"bearer": []}])
 async def chat(request: ChatRequest, ctx: AzureADTokenContext = Depends(auth.require_context)) -> dict:
-    # Forward the user's Azure AD token to the MCP server
     toolset = MCPToolset(
         connection_params=StreamableHTTPConnectionParams(
             url=request.mcp_url,
@@ -140,7 +217,7 @@ async def chat(request: ChatRequest, ctx: AzureADTokenContext = Depends(auth.req
     return {"reply": result_text}
 ```
 
-The `headers={"Authorization": f"Bearer {ctx.token}"}` line is the **only auth-specific addition** — everything else is standard ADK boilerplate. ProdMCP's `_mcp_secured_wrapper` handles server-side token extraction transparently.
+The `headers={"Authorization": f"Bearer {ctx.token}"}` line is the **only auth-specific addition** — everything else is standard ADK boilerplate.
 
 ---
 
@@ -210,10 +287,6 @@ Open `http://localhost:5173` and sign in with your Azure AD account.
 | `GET /data` → **Run without auth** | Returns 401 Unauthorized |
 | `GET /api/tools` → **Run** | Lists live MCP tools registered on the server |
 
-**Sidebar — List Tools:** Confirms the MCP server is reachable and tools are registered.
-
-**Chat box:** Type a message — the ADK agent uses `gemini-2.5-flash` and invokes `get_data` via MCP when relevant.
-
 ---
 
 ## Features
@@ -222,12 +295,14 @@ Open `http://localhost:5173` and sign in with your Azure AD account.
 - **Decorator Stacking** — `@app.tool()` + `@app.get()` on the same handler with `@app.common()` for shared config
 - **HTTP Methods** — `@app.get()`, `@app.post()`, `@app.put()`, `@app.delete()`, `@app.patch()`
 - **MCP Primitives** — `@app.tool()`, `@app.prompt()`, `@app.resource()`
+- **Auto Response Descriptions** — Pydantic model docstrings propagate to OpenAPI and OpenMCP specs automatically
+- **Return-Annotation Fallback** — `output_schema` inferred from `-> ReturnType` annotation automatically
 - **Schema-First Validation** — Pydantic models or raw JSON Schema for input/output
 - **Security Layer** — Bearer, API key, OAuth2, OpenID Connect; `prodmcp.integrations.azure` for Azure AD
 - **Middleware System** — Global and per-handler before/after hooks
 - **Dependency Injection** — `Depends()` compatible with FastAPI and ProdMCP dependencies
 - **ADK-Ready** — Works out of the box with Google Agent Development Kit via `MCPToolset`
-- **OpenMCP Spec** — Auto-generated machine-readable specification
+- **OpenMCP Spec** — Auto-generated machine-readable specification with `output_description` per capability
 
 ## License
 
@@ -239,9 +314,21 @@ MIT
 
 See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
+### v0.5.0 — Response descriptions from Pydantic docstrings + security hardening
+
+- Pydantic model docstrings now automatically populate `responses.200.description` (OpenAPI) and `output_description` (OpenMCP) — no decorator changes needed.
+- `Union[A, B]` responses compose a combined description: `"ModelA: desc | ModelB: desc"`.
+- Return-annotation `output_schema` fallback: `-> MyModel` is sufficient, `output_schema=MyModel` in the decorator is no longer required.
+- Full OAuth2 `authorizationCode` flow emitted in security schemes (42Crunch / `OMCP-SEC-012` compliant).
+- Global and per-operation `security` fields injected for all prompts, resources, and tools.
+
+### v0.4.0 — REST Bridge API cleanup
+
+Renamed `app.as_fastapi()` → `app.test_mcp_as_fastapi()`. Old name removed.
+
 ### v0.3.12 — Pydantic schema fix for secured MCP tools with ADK
 
-Fixes a startup crash when ADK's `MCPToolset` is used with tools that have user-defined dependency types (e.g. `AzureADTokenContext`) — `@functools.wraps` was leaking `__annotations__` from the original handler into `_mcp_secured_wrapper`, causing `PydanticSchemaGenerationError`.
+Fixes a startup crash when ADK's `MCPToolset` is used with tools that have user-defined dependency types.
 
 ### v0.3.11 — Azure AD / Entra ID integration (`prodmcp.integrations.azure`)
 
@@ -249,11 +336,11 @@ Fixes a startup crash when ADK's `MCPToolset` is used with tools that have user-
 
 ### v0.3.10 — MCP tool security fix (Bug 10)
 
-ProdMCP-secured MCP tools were raising `ProdMCPSecurityError` on every ADK/MCP call because `__security_context__` was never injected for MCP protocol calls. Fixed via `_mcp_secured_wrapper` which extracts HTTP headers from FastMCP's `Context` object.
+ProdMCP-secured MCP tools were raising `ProdMCPSecurityError` on every ADK/MCP call because `__security_context__` was never injected for MCP protocol calls.
 
 ### v0.3.9 — FastMCP lifespan fix (Bug 9)
 
-Fixed `RuntimeError: Task group is not initialized` caused by `FastAPI()` being constructed before `mcp_instance.http_app()`, leaving the FastMCP session manager task group uninitialised.
+Fixed `RuntimeError: Task group is not initialized` on startup.
 
 ### v0.3.0 — Unified Framework Release
 
