@@ -1,308 +1,225 @@
 ---
-name: adk_prodmcp_dev
-description: Exhaustive guide for developing, testing, and securing Model Context Protocol (MCP) servers using ProdMCP and MCPcrunch within the Agent Development Kit (ADK).
+name: prodmcp_mcpcrunch_usage
+description: Comprehensive guide for Agent Development Kits (ADK) on how to build production-grade Model Context Protocol (MCP) servers using ProdMCP, including an exhaustive list of decorators, the REST manual testing bridge, and rigorous validation and testing with MCPcrunch (the 42Crunch for OpenMCP specs).
 ---
 
-# Comprehensive Guide to ProdMCP and MCPcrunch for ADK
+# Building and Testing MCP Servers with ProdMCP and MCPcrunch
 
-This skills file provides an exhaustive, end-to-end reference for building production-grade MCP servers using **ProdMCP** and validating them using **MCPcrunch**. 
+This skills file provides an exhaustive, production-ready guide for building Model Context Protocol (MCP) servers using the `ProdMCP` framework and validating them securely and structurally using `MCPcrunch`. 
 
-ProdMCP is a schema-driven framework that bridges FastAPI and FastMCP, providing an identical developer experience for both REST APIs and MCP tools. MCPcrunch is a comprehensive security auditing and conformance testing framework for OpenMCP specifications.
+`ProdMCP` provides a schema-first, FastAPI-like development experience for building MCP tools, prompts, and resources. 
+`MCPcrunch` is an advanced security auditing and conformance testing engine (similar to 42Crunch but built for the OpenMCP Specification) that scores your specification from 0-100 across Security and Data Validation pools.
 
 ---
 
-## 1. Defining APIs and MCP Entities
+## 1. Defining MCP Entities in ProdMCP (Exhaustive Decorator List)
 
-ProdMCP unifies the development of standard REST APIs and MCP entities (Tools, Prompts, Resources) under a single application instance.
+ProdMCP provides three core decorator APIs to expose MCP capabilities. All entities enforce strong typing using Pydantic `BaseModel` classes or raw JSON schemas, which are automatically translated into the OpenMCP specification.
 
-### Initialization
+### 1.1 `@app.tool`
+Tools are state-mutating or action-oriented handlers invoked by an MCP client. They enforce strict input/output validation, security bindings, and middleware.
 
 ```python
-from prodmcp import ProdMCP, LoggingMiddleware
+from pydantic import BaseModel, Field
+from prodmcp import ProdMCP
 
-app = ProdMCP(
-    name="MyAdvancedServer",
-    version="1.0.0",
-    description="A production-grade MCP server.",
-    strict_output=True, # Validates output strictly against schemas
+app = ProdMCP(name="ExampleApp", version="1.0.0")
+
+class CreateTaskInput(BaseModel):
+    title: str = Field(..., min_length=3, max_length=120, description="Task title")
+    priority: str = Field(..., pattern="^(high|medium|low)$")
+
+class TaskOutput(BaseModel):
+    task_id: str = Field(..., max_length=36)
+    status: str = Field(..., max_length=20)
+
+@app.tool(
+    name="create_task",
+    description="Creates a new task. Strict validation ensures the title and priority are correct.",
+    input_schema=CreateTaskInput,
+    output_schema=TaskOutput,
+    security=[{"bearerAuth": []}], # Requires authentication
+    tags={"tasks", "write"},
+    middleware=["standard_logger"]
 )
+async def create_task(title: str, priority: str) -> dict:
+    return {"task_id": "uuid-1234", "status": "created"}
 ```
 
-### Exhaustive List of Decorators
-
-ProdMCP provides decorators that mirror both FastMCP (for MCP) and FastAPI (for HTTP REST).
-
-#### MCP Decorators
-
-1.  **`@app.tool`**: Defines an actionable tool that an LLM can invoke.
-    *   **Parameters**: `name`, `description`, `input_schema`, `output_schema`, `security`, `middleware`, `tags`, `strict`
-    *   **Usage**:
-        ```python
-        from pydantic import BaseModel
-
-        class UserInput(BaseModel):
-            user_id: str
-
-        class UserOutput(BaseModel):
-            name: str
-            role: str
-
-        @app.tool(
-            name="get_user",
-            description="Fetch user details.",
-            input_schema=UserInput,
-            output_schema=UserOutput,
-            tags={"users"}
-        )
-        def get_user(user_id: str) -> dict:
-            return {"name": "Alice", "role": "Admin"}
-        ```
-
-2.  **`@app.prompt`**: Defines a conversational template for the LLM.
-    *   **Parameters**: `name`, `description`, `input_schema`, `output_schema`, `tags`
-    *   **Usage**:
-        ```python
-        @app.prompt(
-            name="review_code",
-            description="Generate a prompt to review a code snippet.",
-            input_schema=UserInput, # Reusing schema
-        )
-        def review_code(user_id: str) -> str:
-            return f"Review the latest commits by user {user_id} for security flaws."
-        ```
-
-3.  **`@app.resource`**: Exposes readable data URIs to the LLM.
-    *   **Parameters**: `uri`, `name`, `description`, `output_schema`, `tags`, `mime_type`
-    *   **Usage**:
-        ```python
-        @app.resource(
-            uri="data://users/{user_id}", # Supports URI templates
-            name="user_profile",
-            description="Read a user's raw profile data.",
-            output_schema=UserOutput
-        )
-        def read_user_profile(user_id: str) -> dict:
-            return {"name": "Alice", "role": "Admin"}
-        ```
-
-#### HTTP REST Decorators (FastAPI Identical)
-
-ProdMCP allows you to expose standard HTTP methods. These are fully compatible with FastAPI's signature.
-
-*   `@app.get(path, ...)`
-*   `@app.post(path, ...)`
-*   `@app.put(path, ...)`
-*   `@app.delete(path, ...)`
-*   `@app.patch(path, ...)`
-
-**Parameters**: `response_model`, `status_code`, `tags`, `summary`, `description`, `dependencies`, `deprecated`, `operation_id`, `include_in_schema`, `response_class`, `responses`, `response_description`
-
-#### Cross-Cutting Decorator
-
-*   **`@app.common`**: Used to share configurations (schemas, security, middleware) when stacking decorators to expose the same handler via both MCP and REST.
-    *   **Parameters**: `input_schema`, `output_schema` (or `response_model`), `security`, `middleware`, `tags`, `strict`
-    *   **Usage**:
-        ```python
-        @app.common(
-            output_schema=UserOutput,
-            security=[{"bearerAuth": ["read_users"]}],
-            middleware=["logging"]
-        )
-        @app.tool(name="fetch_user", description="Get user via MCP")
-        @app.get("/users/{user_id}", tags=["Users"])
-        def fetch_user(user_id: str) -> dict:
-            return {"name": "Alice", "role": "Admin"}
-        ```
-
----
-
-## 2. Dependency Injection and Middleware
-
-### Dependencies (`Depends`)
-ProdMCP supports FastAPI-like dependency injection, crucial for resolving security contexts or database sessions before the handler executes.
+### 1.2 `@app.prompt`
+Prompts are read-only templates that guide Large Language Models (LLMs) on how to behave or format data. They also accept schemas for template variables.
 
 ```python
-from prodmcp import Depends
+class TopicInput(BaseModel):
+    topic: str = Field(..., max_length=200, description="Topic to summarize")
 
-async def extract_tenant(context: dict) -> str:
-    # 'context' contains HTTP headers/query params injected by ProdMCP
-    return context.get("headers", {}).get("x-tenant-id", "default")
-
-@app.tool(name="get_tenant_data")
-def get_tenant_data(tenant: str = Depends(extract_tenant)) -> dict:
-    return {"data": f"Data for {tenant}"}
+@app.prompt(
+    name="summarize_topic",
+    description="Generate a prompt asking the LLM to summarize a specific topic.",
+    input_schema=TopicInput,
+    security=[{"bearerAuth": []}]
+)
+def summarize_topic(topic: str) -> str:
+    return f"Please summarize the topic: {topic}. Be concise and use bullet points."
 ```
 
-### Middleware
-Middleware allows pre- and post-processing of requests (e.g., logging, metrics).
+### 1.3 `@app.resource`
+Resources represent read-only, identifiable data URIs that the client can fetch, such as logs, database dumps, or files.
 
 ```python
-from prodmcp import Middleware, MiddlewareContext
+class LogOutput(BaseModel):
+    log_lines: list[str] = Field(..., max_items=1000)
+    total_count: int = Field(..., ge=0)
 
-class MetricsMiddleware(Middleware):
-    async def before(self, ctx: MiddlewareContext) -> None:
-        print(f"Starting {ctx.entity_type} {ctx.entity_name}")
-    
-    async def after(self, ctx: MiddlewareContext) -> None:
-        if ctx.error:
-            print(f"Failed with {ctx.error}")
-
-# Register globally
-app.add_middleware(MetricsMiddleware())
-
-# Register by name for selective use
-app.add_middleware(MetricsMiddleware(), name="metrics")
+@app.resource(
+    uri="data://system/logs/recent",
+    name="recent_system_logs",
+    description="Fetches the 1000 most recent system logs.",
+    output_schema=LogOutput,
+    mime_type="application/json",
+    security=[{"bearerAuth": ["admin"]}] # Requires 'admin' scope
+)
+async def get_recent_logs() -> dict:
+    return {"log_lines": ["System booted", "User logged in"], "total_count": 2}
 ```
 
 ---
 
-*End of Part 1. Part 2 will cover the Manual Testing Bridge, Security, and MCPcrunch integration.*
-
-## 3. Manual Testing Bridge (FastAPI Bridge)
-
-ProdMCP includes a powerful testing bridge that automatically maps your MCP entities (Tools, Prompts, Resources) to standard FastAPI REST routes. This allows you to manually test your MCP capabilities using standard HTTP clients like `curl`, Postman, or Swagger UI, without needing an MCP client.
-
-### Mapping
-*   **Tools**: Mapped to `POST /tools/{name}`
-*   **Prompts**: Mapped to `POST /prompts/{name}`
-*   **Resources**: Mapped to `GET /resources/{uri}`
-
-### Generating the Bridge App
-
-```python
-# Assuming 'app' is your ProdMCP instance
-fastapi_app = app.test_mcp_as_fastapi()
-
-# Run this script with Uvicorn:
-# uvicorn my_app:fastapi_app --reload
-```
-
-### Manual Testing with the Bridge
-
-Once running (e.g., at `http://localhost:8000`), you can test:
-
-**Test a Tool:**
-```bash
-curl -X POST http://localhost:8000/tools/get_user \
-     -H "Content-Type: application/json" \
-     -d '{"user_id": "123"}'
-```
-
-**Test a Resource:**
-```bash
-curl -X GET http://localhost:8000/resources/data://users/123
-```
-
-**Swagger UI:**
-Navigate to `http://localhost:8000/docs` in your browser. The bridge automatically generates complete OpenAPI documentation for all your MCP entities, including their Pydantic schemas, enabling interactive manual testing directly from the browser.
-
----
-
-## 4. Security
-
-ProdMCP features a dedicated `SecurityManager` that mimics OpenAPI's robust security schemes.
+## 2. Security and Middleware
 
 ### Registering Security Schemes
+Security schemes must be registered globally before they are referenced in the `@app.tool`, `@app.prompt`, or `@app.resource` decorators. This mapping is vital for OpenMCP compliance.
 
 ```python
 from prodmcp import BearerAuth, ApiKeyAuth
 
-# Global registration
 app.add_security_scheme("bearerAuth", BearerAuth(scopes=["admin", "user"]))
 app.add_security_scheme("apiKeyAuth", ApiKeyAuth(key_name="X-API-Key", location="header"))
 ```
 
-### Applying Security
-
-Security is applied using the `security` parameter in decorators. It accepts a list of dictionaries representing logical **OR** combinations. Keys within a dictionary represent logical **AND**.
+### Dependency Injection
+Dependencies run before the main handler and can resolve Context/Authentication payloads.
 
 ```python
+from prodmcp import Depends
+
+async def get_user_session(context: dict) -> dict:
+    token = context.get('headers', {}).get('authorization')
+    return {"user_id": "123", "role": "admin"}
+
 @app.tool(
-    name="delete_data",
-    # Requires either Admin Bearer Token OR a valid API Key
-    security=[
-        {"bearerAuth": ["admin"]},
-        {"apiKeyAuth": []}
-    ]
+    name="delete_account",
+    security=[{"bearerAuth": []}]
 )
-def delete_data() -> dict:
-    return {"status": "deleted"}
+async def delete_account(session: dict = Depends(get_user_session)):
+    return {"deleted": session["user_id"]}
 ```
 
 ---
 
-## 5. Testing MCP using MCPcrunch
+## 3. The Manual Testing Bridge (FastAPI REST Bridge)
 
-**MCPcrunch** is the companion tool to ProdMCP, designed to audit and validate OpenMCP specifications and test live server conformance.
+While MCP communicates over standard stdio or SSE transports, manual testing of these binary/stream protocols is difficult via `curl` or Postman. 
 
-### Step 1: Export the OpenMCP Specification
+ProdMCP provides a **FastAPI Bridge** (`test_mcp_as_fastapi()`) that compiles all your MCP tools, prompts, and resources directly into a standard FastAPI REST application.
 
-First, use ProdMCP to auto-generate your OpenMCP specification.
-
+### Using the Bridge
 ```python
-# In your server script
-spec_json = app.export_openmcp_json(indent=2)
-with open("spec.json", "w") as f:
-    f.write(spec_json)
+# Create the REST application bridge
+fastapi_app = app.test_mcp_as_fastapi() 
+
+# Run this file using uvicorn:
+# uvicorn my_app:fastapi_app --reload --port 8000
 ```
 
-### Step 2: Security Audit (Static Analysis)
+### Bridge Routes Generated:
+1. `POST /tools/create_task` -> Tests the tool execution with JSON body payloads.
+2. `POST /prompts/summarize_topic` -> Tests template generation.
+3. `GET /resources/recent_system_logs` -> Tests resource fetching.
 
-Run MCPcrunch to perform a deterministic audit against your `spec.json`. This checks for security flaws, missing documentation, and schema violations.
+This allows you to manually verify inputs, outputs, and validation rules using standard HTTP clients or the built-in Swagger UI at `http://localhost:8000/docs`.
 
-```bash
-# Basic Audit
-mcpcrunch spec.json
+---
 
-# Audit with LLM semantic analysis (checks for prompt injection, etc.)
-mcpcrunch spec.json --llm gemini --api-key $GEMINI_API_KEY
-```
-MCPcrunch provides a partitioned score out of 100 (Security /30, Data Validation /70) and a component-wise breakdown, identifying exactly which tool/prompt is lowering your score.
+## 4. MCPcrunch Validation & Conformance Testing
 
-### Step 3: Conformance Testing (Dynamic Analysis)
+`MCPcrunch` is the security auditing and runtime conformance engine for OpenMCP specifications. It acts identically to 42Crunch but is tailored for the MCP domain.
 
-MCPcrunch can perform static and runtime conformance tests to ensure your MCP implementation adheres strictly to the protocol and handles errors correctly.
-
-**Static Conformance Testing:**
-Checks for `$ref` validity, schema strictness (`additionalProperties: false`), and property boundaries (`maxLength`, `maxItems`).
-
-```bash
-mcpcrunch conformance spec.json --static-only
-```
-
-**Runtime Conformance Testing:**
-Connects to your running ProdMCP server via the testing bridge or live MCP SSE endpoint to verify actual runtime behaviour (e.g., ensuring 401 Unauthorized is returned when tokens are missing).
-
-```bash
-mcpcrunch conformance spec.json \
-    --server-url http://localhost:8000/mcp \
-    --bearer-token "your-test-token"
-```
-
-### Programmatic MCPcrunch Integration (Python API)
-
-You can integrate MCPcrunch directly into your ADK testing pipelines using its Python API.
+To use MCPcrunch, you must first export your ProdMCP app to the OpenMCP spec format:
 
 ```python
 import json
-from mcpcrunch import MCPcrunch, ConformanceRunner
+with open("spec.json", "w") as f:
+    f.write(app.export_openmcp_json(indent=2))
+```
 
-# Load the spec generated by ProdMCP
+### 4.1 Security Auditing (Static Analysis)
+
+The Security Audit analyzes the `spec.json` statically, scoring it out of 100. The score is partitioned into two pools:
+- **Security Pool (Max 30):** Penalized by `OMCP-SEC-*` violations.
+- **Data Validation Pool (Max 70):** Penalized by Format (`FMT`), Data Quality (`DAT`), and Documentation (`DOC`) violations.
+
+**Using the Python API for Auditing:**
+```python
+from mcpcrunch import MCPcrunch
+
+crunch = MCPcrunch("schema.json") # The base OpenMCP Meta-schema
 with open("spec.json") as f:
     spec = json.load(f)
 
-# 1. Audit
-crunch = MCPcrunch()
 report = crunch.audit(spec)
-print(f"Overall Audit Score: {report.deterministic.score}/100")
-
-# 2. Conformance
-runner = ConformanceRunner(spec_path="spec.json")
-conf_report = runner.run_static()
-print(f"Conformance Grade: {conf_report.summary.grade}")
+print(f"Overall Score: {report.overall_score}/100")
+for issue in report.deterministic.issues:
+    print(f"[{issue.severity.value}] {issue.rule_id}: {issue.message}")
 ```
 
-### MCPcrunch Key Concepts
-*   **OMCP-DOC Rules**: Flags missing descriptions on capabilities or responses.
-*   **OMCP-SEC Rules**: Ensures security schemes are bound, API keys aren't in URLs, and proper HTTP error codes (401, 403, 406, 415, 429) are defined.
-*   **Strictness**: Ensure `strict_output=True` is enabled in ProdMCP and all Pydantic models forbid extra properties to score high on MCPcrunch conformance.
+### 4.2 Runtime Conformance Testing
+
+Conformance testing involves dynamically calling the live MCP server using test cases derived via mutation testing on the OpenMCP schemas.
+
+```python
+from mcpcrunch import ConformanceRunner, AuthConfig
+
+runner = ConformanceRunner(
+    spec_path="spec.json",
+    server_url="https://api.myapp.com/mcp",
+    schema_path="schema.json",
+    auth=AuthConfig(bearer_token="eyJhb...")
+)
+
+report = runner.run_all() # Runs static integrity + runtime tests
+print(f"Pass Rate: {report.summary.pass_rate}")
+```
+
+---
+
+## 5. Mitigating MCPcrunch Score Deductions
+
+To achieve a perfect "Grade A" 100/100 score, your ProdMCP schemas and configuration must be airtight. Below are the primary deductions and how to fix them in ProdMCP.
+
+### A. Format & Documentation Issues (Data Validation Pool)
+- **`OMCP-FMT-006` (Name Collisions):** Ensure no two tools, prompts, or resources share the exact same `name`.
+- **`OMCP-DOC-001` (Missing Descriptions):** Every tool, prompt, and resource MUST have a comprehensive `description`.
+  *Fix:* `@app.tool(name="...", description="Detailed usage instructions...", ...)`
+- **`OMCP-DOC-002` (Missing Response Descriptions):** Output properties must be described.
+  *Fix:* Use Pydantic `Field(..., description="...")` inside your Output schemas.
+
+### B. Data Quality Constraints (Data Validation Pool - Critical)
+If inputs are unbounded, LLMs can perform resource exhaustion or injection attacks.
+- **`OMCP-DAT-001` (Strict Objects):** Input schemas must reject unknown properties.
+  *Fix:* Pydantic V2 handles this by default, but ensure no `Extra.allow` configs exist. MCPcrunch expects `additionalProperties: false`.
+- **`OMCP-DAT-003` (String Boundaries):** Every string field MUST have a `maxLength` to prevent buffer/payload exhaustion.
+  *Fix:* `name: str = Field(..., max_length=100)`
+- **`OMCP-DAT-004` (Regex Patterns):** Sensitive identifiers (emails, UUIDs, IPs) MUST have strict regex patterns.
+  *Fix:* `email: str = Field(..., pattern="^[\w\.-]+@[\w\.-]+\.\w+$")`
+- **`OMCP-DAT-005` & `OMCP-DAT-006` (Array/Numeric Bounds):** Arrays need `maxItems`; integers need `minimum` and `maximum`.
+  *Fix:* `tags: list[str] = Field(..., max_items=10)`, `age: int = Field(..., ge=0, le=120)`
+
+### C. Security Posture (Security Pool)
+- **`OMCP-SEC-001` (Dangling Security bindings):** If you apply `security=[{"bearerAuth": []}]`, you MUST have called `app.add_security_scheme("bearerAuth", ...)` globally.
+- **`OMCP-SEC-003` (Auth Enforcement):** Tools executing sensitive actions must not have empty security arrays.
+  *Fix:* ALWAYS apply `security=[...]` to modifying endpoints.
+- **`OMCP-SEC-005` (Transport Safety):** The base URL declared in `servers` must be `https://` or `wss://`. Do not hardcode `http://` for production specs.
+- **`OMCP-ADV-005` (Localhost bindings):** The `servers.url` must not point to `localhost` or `127.0.0.1` in production to prevent SSRF bypasses.
+
+By adhering to strict Pydantic `Field` boundaries and enforcing global security schemes, you ensure the LLM interacts with deterministic, secure, and compliant MCP instances.
